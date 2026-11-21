@@ -11,6 +11,8 @@ import { createSession, runAgent } from './agent/loop.js';
 import { digest } from './agent/tools.js';
 import { finalize } from './design/spec.js';
 import { analyzeReference, referenceBrief } from './design/reference.js';
+import { PROGRAMMES, STYLES } from './design/generator.js';
+import { PARAM_SCHEMA, composePrompt } from './design/promptParams.js';
 import {
   addLibraryItem,
   dropSessionState,
@@ -293,6 +295,47 @@ const server = http.createServer(async (req, res) => {
         hint: String(body.message || ''),
       });
       return json(res, 200, { reference: { url: referenceUrl, analysis }, brief: referenceBrief(analysis, { hint: body.message, dimensions: body.dimensions }) });
+    }
+
+    // ------------------------------------------------- parameterised prompts
+    if (p === '/api/prompt/params' && method === 'GET') {
+      return json(res, 200, {
+        schema: PARAM_SCHEMA,
+        vocab: {
+          programmes: Object.fromEntries(Object.entries(PROGRAMMES).map(([k, v]) => [k, v.label])),
+          styles: Object.fromEntries(Object.entries(STYLES).map(([k, v]) => [k, v.label])),
+        },
+      });
+    }
+
+    if (p === '/api/prompt/build' && method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      return json(res, 200, composePrompt(body.params || body));
+    }
+
+    if (p === '/api/prompt/design' && method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const built = composePrompt(body.params || body);
+      const sid = body.sid || 'demo';
+      // keep the conversation unless the caller explicitly asks for a fresh one
+      if (body.reset === true) {
+        sessions.set(sid, createSession(''));
+        dropSessionState(sid);
+      }
+      const s = getSession(sid);
+      const result = await runAgent({ session: s, message: built.prompt, mode: body.mode, emit: () => {} });
+      finalize(s.spec);
+      persist(sid, s);
+      return json(res, 200, {
+        text: result.text,
+        mode: result.mode,
+        prompt: built.prompt,
+        params: built.params,
+        checks: built.checks,
+        warnings: built.warnings,
+        spec: s.spec,
+        digest: digest(s.spec),
+      });
     }
 
     if (p === '/api/design' && method === 'POST') {

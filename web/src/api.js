@@ -95,6 +95,19 @@ export const purgeLibraryItem = (id) => req(`/api/trash/${id}`, { method: 'DELET
 export const emptyTrash = () => req('/api/trash', { method: 'DELETE' });
 
 // ---------------------------------------------------------------------- chat
+// ------------------------------------------------------------- prompt builder
+export const getPromptParams = () => req('/api/prompt/params');
+
+export const buildPrompt = (params) => req('/api/prompt/build', {
+  method: 'POST',
+  body: JSON.stringify({ params }),
+});
+
+export const designFromPrompt = (params, mode = 'auto') => req('/api/prompt/design', {
+  method: 'POST',
+  body: JSON.stringify({ params, mode, sid: SID }),
+});
+
 export async function chatStream({ message, mode, image, palette, dimensions, onEvent, signal }) {
   const res = await fetch('/api/chat', {
     method: 'POST',

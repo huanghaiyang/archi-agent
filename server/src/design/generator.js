@@ -173,8 +173,10 @@ export function parseBrief(text = '') {
   else if (/(学校|教室|教学|幼儿园)/.test(src)) out.programme = 'school';
   else if (/(社区|活动中心|便民)/.test(src)) out.programme = 'community';
 
-  if (/(坡屋顶|双坡|坡屋)/.test(src)) out.roof = 'gable';
-  else if (/单坡/.test(src)) out.roof = 'shed';
+  // order matters: "单坡屋顶" and "四坡屋顶" both contain "坡屋顶"
+  if (/单坡/.test(src)) out.roof = 'shed';
+  else if (/(四坡|庑殿|歇山)/.test(src)) out.roof = 'hip';
+  else if (/(坡屋顶|双坡|坡屋)/.test(src)) out.roof = 'gable';
   else if (/平屋顶/.test(src)) out.roof = 'flat';
 
   if (/(极简|纯白|白墙|minimal)/i.test(src)) out.style = 'minimal';
@@ -182,6 +184,7 @@ export function parseBrief(text = '') {
   else if (/(木|木质|格栅|timber)/i.test(src)) out.style = 'timber';
   else if (/(科技|金属|铝板|玻璃幕墙)/.test(src)) out.style = 'tech';
   else if (/(青砖|传统|砖砌)/.test(src)) out.style = 'brick';
+  else if (/(清水混凝土|混凝土|concrete)/i.test(src)) out.style = 'concrete';
 
   if (/退台/.test(src)) out.stepped = true;
   if (/哈尔滨|东北|严寒/.test(src)) out.climate = 'severe-cold';

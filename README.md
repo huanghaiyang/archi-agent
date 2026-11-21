@@ -38,6 +38,8 @@
 
 ![住宅 8 层 + 青砖 + 陶瓦屋面](docs/07-housing.png)
 
+![参数化提示词面板：左侧参数、右侧实时任务书与识别校验](docs/08-prompt-builder.png)
+
 
 ## 快速开始
 
@@ -143,6 +145,35 @@ MODEL_PROVIDER=ollama MODEL_NAME=qwen2.5:7b npm start
 3. 拼成任务书交给 Agent，**但用户在输入框里写的功能与层数优先**——写「做 6 层住宅」，参考图不会把它改成「4 层图书馆」。
 
 参考图会落盘到 `server/data/refs/`，随会话一起恢复；`POST /api/reference` 可以只解析不生成方案。
+
+## 参数化提示词（prompt builder）
+
+左栏对话页右上角「参数化提示词」打开参数面板：13 个字段分成「场地/地点」「功能/规模」「风格/屋顶」「附加要求」四组，改动任意一项，右侧就重新组合出任务书，并即时回显每一项是否被引擎识别。
+
+| 参数 | 去向 |
+| --- | --- |
+| 城市 / 场地宽 / 进深 | 任务书首句 `哈尔滨 40×28m 场地`，被 `parseBrief` 的正则读成 `site` |
+| 功能类型 / 层数 / 目标面积 | `design_scheme` 的 `programme`、`floors`、`area` |
+| 立面风格 / 屋顶形式 / 坡度 / 顶层退台 | `style`、`roof`（平/双坡/单坡/四坡）、`pitch`、`stepped` |
+| 气候区 | `climate`（严寒 / 温和 / 湿热），影响南向开窗与密度上限 |
+| 细部做法（天窗、光伏、屋顶绿化、雨棚、坡道、通高门厅、竖向遮阳、夜景） | 只写进自然语言，由模型挑对应工具落地 |
+| 其他要求 | 原样拼进「补充：…」，不影响结构化字段 |
+
+组合规则落在 `server/src/design/promptParams.js`：`PARAM_SCHEMA` 是表单元数据（前端直接按它渲染，不硬编码选项），`composePrompt()` 负责拼句子并**反向自检**——把生成的提示词再喂给 `parseBrief`，逐字段比对，识别不出来的会进 `warnings`（例如选了四坡屋顶但正则只认双坡，就会提示出来）。所以「参数组合」和「引擎真正吃到的值」永远对得上。
+
+```javascript
+// 纯后端也能用
+import { composePrompt } from './server/src/design/promptParams.js';
+const { prompt, checks, warnings } = composePrompt({ city: '哈尔滨', programme: 'library', floors: 3, width: 40, depth: 28, style: 'timber', roof: 'gable' });
+```
+
+接口：
+
+- `GET /api/prompt/params` → `{ schema, vocab }`
+- `POST /api/prompt/build` → `{ prompt, params, segments, checks, warnings }`
+- `POST /api/prompt/design` → 组合后直接跑 Agent，返回 `{ prompt, spec, digest, checks }`（默认接着当前会话，传 `reset:true` 才清空）
+
+面板底部三个出口：复制、填入对话（作为草稿，可继续改字或附参考图）、直接生成方案（一次性出图并保留对话历史）。
 
 ## 成品库 / 回收站 / 风格分类
 

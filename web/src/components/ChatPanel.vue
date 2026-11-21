@@ -5,11 +5,14 @@
         <h2>主创建筑师</h2>
         <p>{{ busy ? statusText || '处理中…' : '描述任务书，或直接提出修改' }}</p>
       </div>
-      <select :value="mode" class="mode" @change="$emit('update:mode', $event.target.value)">
-        <option value="auto">自动</option>
-        <option value="hy4">Hy4</option>
-        <option value="local">本地</option>
-      </select>
+      <div class="head-tools">
+        <button class="prompt-btn" title="按参数组合生成任务书" @click="builderOpen = true">参数化提示词</button>
+        <select :value="mode" class="mode" @change="$emit('update:mode', $event.target.value)">
+          <option value="auto">自动</option>
+          <option value="hy4">Hy4</option>
+          <option value="local">本地</option>
+        </select>
+      </div>
     </div>
 
     <div ref="scroller" class="thread">
@@ -79,12 +82,20 @@
       </div>
       <input ref="fileEl" type="file" accept="image/*" hidden @change="onFile" />
     </div>
+
+    <PromptBuilder
+      v-if="builderOpen"
+      @close="builderOpen = false"
+      @apply="onPromptApply"
+      @spec="onPromptSpec"
+    />
   </section>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { chatStream, getSession, paletteFromImage, readFileAsDataUrl } from '../api.js';
+import PromptBuilder from './PromptBuilder.vue';
 
 const props = defineProps({ mode: { type: String, default: 'auto' } });
 const emit = defineEmits(['update:mode', 'spec']);
@@ -98,6 +109,7 @@ const inputEl = ref(null);
 const fileEl = ref(null);
 const attached = ref(null);
 const reference = ref(null);
+const builderOpen = ref(false);
 let controller = null;
 
 const canSend = computed(() => Boolean(draft.value.trim() || attached.value) && !busy.value);
@@ -273,8 +285,16 @@ function clear() {
   reference.value = null;
 }
 
-async function refreshReference() {
-  try {
+function onPromptApply(text) {
+  draft.value = text;
+  nextTick(() => inputEl.value?.focus());
+}
+
+function onPromptSpec(spec) {
+  if (spec) emit('spec', spec);
+}
+
+async function refreshReference() {  try {
     const data = await getSession();
     reference.value = data.reference || null;
   } catch {
@@ -316,6 +336,11 @@ onUnmounted(() => controller?.abort());
 }
 .chat-head h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
 .chat-head p { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); max-width: 250px; }
+.head-tools { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.prompt-btn {
+  font-size: 11px; padding: 4px 8px; border-radius: 7px;
+  border: 1px solid rgba(213, 163, 92, 0.35); color: var(--accent); white-space: nowrap;
+}
 .mode {
   background: var(--panel-2);
   color: var(--muted);
