@@ -61,6 +61,7 @@ export class ArchiViewer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
+    this.renderer.localClippingEnabled = true;
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
@@ -110,6 +111,10 @@ export class ArchiViewer {
     canvas.addEventListener('pointerup', this._onPointerUp);
 
     this.options = { roof: true, labels: false, isolate: 0, explode: false, time: 'day', context: true, wireframe: false };
+    this.section = { enabled: false, axis: 'z', offset: 50, flip: false, cap: true };
+    this.sectionRange = { x: [0, 1], y: [0, 1], z: [0, 1] };
+    this.sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+    this.sectionHelper = null;
     this.spec = null;
     this.mats = null;
     this.floorGroups = [];
@@ -306,6 +311,7 @@ export class ArchiViewer {
     // shallow fog is set per time preset
     this.applyTimeOfDay(this.options.time);
     this.selected = null;
+    this.updateSectionRange();
     this.applyOptions();
     this.frame();
     this.notify();
@@ -496,12 +502,14 @@ export class ArchiViewer {
     if (this.contextGroup) this.contextGroup.visible = context;
     this.floorGroups.forEach((g) => { g.visible = !isolate || g.userData.level === isolate; });
     if (this.labelsGroup) {
-      this.labelsGroup.visible = labels;
+      const show = labels && !this.section.enabled;
+      this.labelsGroup.visible = show;
       this.labelsGroup.children.forEach((s) => {
-        s.visible = labels && (!isolate || s.userData.level === isolate);
+        s.visible = show && (!isolate || s.userData.level === isolate);
       });
     }
     this.applyWireframe();
+    this.applySection();
     this.applyHidden();
   }
 
@@ -514,6 +522,135 @@ export class ArchiViewer {
         mat.needsUpdate = true;
       }
     }
+  }
+
+  // ---------------------------------------------------------------- section
+  updateSectionRange() {
+    const box = new THREE.Box3();
+    if (this.building) box.setFromObject(this.building);
+    if (box.isEmpty()) {
+      const w = this.spec?.site?.width || 30;
+      const d = this.spec?.site?.depth || 30;
+      box.set(new THREE.Vector3(-w / 2, 0, -d / 2), new THREE.Vector3(w / 2, 14, d / 2));
+    }
+    this.sectionRange = {
+      x: [box.min.x, box.max.x],
+      y: [box.min.y, box.max.y],
+      z: [box.min.z, box.max.z],
+    };
+    this.sectionCenter = box.getCenter(new THREE.Vector3());
+    this.sectionSize = box.getSize(new THREE.Vector3());
+  }
+
+  /** World-space position of the cut for the active axis (0–100 %). */
+  sectionPosition() {
+    const [min, max] = this.sectionRange[this.section.axis] || [0, 1];
+    const t = THREE.MathUtils.clamp(this.section.offset, 0, 100) / 100;
+    return min + (max - min) * t;
+  }
+
+  applySection() {
+    const S = this.section;
+    const mats = this.mats ? [...this.mats.cache.values()] : [];
+
+    if (!S.enabled || !this.spec) {
+      for (const mat of mats) {
+        if (mat.clippingPlanes?.length) {
+          mat.clippingPlanes = null;
+          mat.needsUpdate = true;
+        }
+      }
+      if (this.sectionHelper) this.sectionHelper.visible = false;
+      return;
+    }
+
+    const pos = this.sectionPosition();
+    const normal = new THREE.Vector3(
+      S.axis === 'x' ? 1 : 0,
+      S.axis === 'y' ? 1 : 0,
+      S.axis === 'z' ? 1 : 0,
+    );
+    if (S.flip) normal.negate();
+    // Plane equation normal·p + constant = 0; Three keeps the positive side.
+    this.sectionPlane.set(normal, -normal.dot(new THREE.Vector3(
+      S.axis === 'x' ? pos : 0,
+      S.axis === 'y' ? pos : 0,
+      S.axis === 'z' ? pos : 0,
+    )));
+
+    for (const mat of mats) {
+      if (!('clippingPlanes' in mat)) continue;
+      mat.clippingPlanes = [this.sectionPlane];
+      mat.clipShadows = true;
+      mat.needsUpdate = true;
+    }
+
+    this.buildSectionHelper(pos);
+  }
+
+  buildSectionHelper(pos) {
+    const size = this.sectionSize || new THREE.Vector3(30, 14, 30);
+    const center = this.sectionCenter || new THREE.Vector3();
+    const S = this.section;
+    const axis = S.axis;
+
+    let w = size.x;
+    let h = size.y;
+    if (axis === 'x') { w = size.z + 1.2; h = size.y + 1.2; }
+    else if (axis === 'y') { w = size.x + 1.2; h = size.z + 1.2; }
+    else { w = size.x + 1.2; h = size.y + 1.2; }
+
+    if (this.sectionHelper) {
+      this.scene.remove(this.sectionHelper);
+      this.sectionHelper.traverse?.((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
+    }
+
+    const g = new THREE.Group();
+    if (axis === 'x') {
+      g.rotation.y = Math.PI / 2;
+      g.position.set(pos, center.y, center.z);
+    } else if (axis === 'y') {
+      g.rotation.x = -Math.PI / 2;
+      g.position.set(center.x, pos, center.z);
+    } else {
+      g.position.set(center.x, center.y, pos);
+    }
+
+    const plane = new THREE.PlaneGeometry(w, h);
+    const fill = new THREE.Mesh(plane, new THREE.MeshBasicMaterial({
+      color: 0xd5a35c,
+      transparent: true,
+      opacity: S.cap ? 0.075 : 0.02,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }));
+    fill.renderOrder = 4;
+    g.add(fill);
+
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(plane),
+      new THREE.LineBasicMaterial({ color: 0xe1b877, transparent: true, opacity: 0.9, depthTest: false }),
+    );
+    edge.renderOrder = 5;
+    g.add(edge);
+
+    this.sectionHelper = g;
+    g.visible = true;
+    this.scene.add(g);
+  }
+
+  setSection(patch = {}) {
+    Object.assign(this.section, patch);
+    this.applyOptions();
+    this.notify();
+    return this.getSection();
+  }
+
+  getSection() {
+    return { ...this.section, position: +this.sectionPosition().toFixed(2), range: this.sectionRange };
   }
 
   applyHidden() {
@@ -714,6 +851,7 @@ export class ArchiViewer {
       canUndo: this.hIndex >= 0,
       canRedo: this.hIndex < this.history.length - 1,
       wireframe: Boolean(this.options.wireframe),
+      section: this.getSection(),
       lighting: this.getLighting(),
       stats: this.getStats(),
     };
@@ -744,6 +882,16 @@ export class ArchiViewer {
   disposeInteriorLights() {
     this.interiorLights?.forEach((l) => this.scene.remove(l));
     this.interiorLights = [];
+  }
+
+  disposeSectionHelper() {
+    if (!this.sectionHelper) return;
+    this.scene.remove(this.sectionHelper);
+    this.sectionHelper.traverse?.((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+    });
+    this.sectionHelper = null;
   }
 
   // ----------------------------------------------------------------- camera
@@ -819,6 +967,8 @@ export class ArchiViewer {
   disposeBuilding() {
     this.clearSelection();
     this.disposeInteriorLights();
+    this.disposeSectionHelper();
+    this.section.enabled = false;
     this.root.children.slice().forEach((child) => {
       child.traverse?.((o) => {
         if (o.geometry) o.geometry.dispose();

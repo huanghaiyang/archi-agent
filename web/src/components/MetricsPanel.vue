@@ -9,6 +9,7 @@
       <button :class="{ on: tab === 'metrics' }" @click="tab = 'metrics'">指标</button>
       <button :class="{ on: tab === 'nodes' }" @click="tab = 'nodes'">节点 <em>{{ stats.nodes || 0 }}</em></button>
       <button :class="{ on: tab === 'light' }" @click="tab = 'light'">光照</button>
+      <button :class="{ on: tab === 'section' }" @click="tab = 'section'">剖切</button>
     </div>
 
     <!-- ------------------------------------------------------------ metrics -->
@@ -177,6 +178,62 @@
       </template>
     </template>
 
+    <!-- ------------------------------------------------------------ section -->
+    <template v-else-if="tab === 'section'">
+      <div class="scroll">
+        <div v-if="!spec" class="blank"><p>生成方案后可按 X / Y / Z 任意方向剖切模型，查看内部空间与构造层次。</p></div>
+
+        <template v-else>
+          <div class="section first">
+            <button class="toggle-line" :class="{ on: section.enabled }" @click="setSection('enabled', !section.enabled)">
+              <span>开启剖切</span>
+              <b>{{ section.enabled ? '开' : '关' }}</b>
+            </button>
+            <p class="hint">剖切只作用于建筑主体，场地与周边体量保持完整，便于对照环境。</p>
+          </div>
+
+          <div class="section">
+            <div class="section-head"><h3>剖切方向</h3></div>
+            <div class="seg">
+              <button v-for="a in axes" :key="a.key" :class="{ on: section.axis === a.key }" @click="setSection('axis', a.key)">{{ a.label }}</button>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-head">
+              <h3>剖切位置</h3>
+              <span class="count">{{ section.position }} m</span>
+            </div>
+            <label class="slider-row wide-label">
+              <span>位置</span>
+              <input type="range" min="0" max="100" step="1" :value="section.offset" @input="setSection('offset', Number($event.target.value))" />
+              <b>{{ Math.round(section.offset) }}%</b>
+            </label>
+            <div class="quick-row">
+              <button v-for="q in quickCuts" :key="q" @click="setSection('offset', q)">{{ q }}%</button>
+            </div>
+            <button class="toggle-line" :class="{ on: section.flip }" @click="setSection('flip', !section.flip)">
+              <span>保留侧</span>
+              <b>{{ cutSideLabel }}</b>
+            </button>
+          </div>
+
+          <div class="section">
+            <div class="section-head"><h3>剖切面显示</h3></div>
+            <button class="toggle-line" :class="{ on: section.cap }" @click="setSection('cap', !section.cap)">
+              <span>半透明剖切面</span>
+              <b>{{ section.cap ? '显示' : '隐藏' }}</b>
+            </button>
+            <p class="hint">橙色薄面标出切割位置；拖动位置时实时更新，不重建模型。</p>
+          </div>
+
+          <div class="section">
+            <button class="wide-btn" @click="resetSection">复位剖切（50% · 关闭）</button>
+          </div>
+        </template>
+      </div>
+    </template>
+
     <!-- ------------------------------------------------------------- light -->
     <template v-else>
       <div class="scroll">
@@ -275,13 +332,24 @@ const light = reactive({
   hemiIntensity: 0.52, fill: 0.4, env: 0.72, exposure: 0.96,
   shadows: 'soft', interior: false,
 });
+const section = reactive({
+  enabled: false, axis: 'z', offset: 50, flip: false, cap: true,
+  position: 0, range: { x: [0, 1], y: [0, 1], z: [0, 1] },
+});
+const axes = [
+  { key: 'x', label: '横剖 X' },
+  { key: 'y', label: '水平 Y' },
+  { key: 'z', label: '纵剖 Z' },
+];
+const quickCuts = [25, 50, 75];
+const cutSideLabel = computed(() => `保留 ${section.flip ? '-' : '+'}${String(section.axis).toUpperCase()} 侧`);
 
 const FACADE_LABEL = { punched: '点式开洞', ribbon: '水平条窗', curtain: '玻璃幕墙', screen: '竖向内凹格栅' };
 const ROOF_LABEL = { flat: '平屋顶', gable: '双坡屋顶', shed: '单坡屋顶', hip: '四坡屋顶' };
 const facadeLabel = computed(() => (props.spec ? FACADE_LABEL[props.spec.facade.system] || props.spec.facade.system : ''));
 const roofLabel = computed(() => (props.spec ? ROOF_LABEL[props.spec.massing.roof.type] || props.spec.massing.roof.type : ''));
 
-const title = computed(() => ({ metrics: '方案指标', nodes: '模型节点', light: '光照与环境' }[tab.value]));
+const title = computed(() => ({ metrics: '方案指标', nodes: '模型节点', light: '光照与环境', section: '剖切展示' }[tab.value]));
 const verdict = computed(() => props.spec?.checkSummary?.verdict || '');
 const verdictClass = computed(() => {
   const s = props.spec?.checkSummary;
@@ -327,6 +395,7 @@ function sync() {
   const s = props.viewer.getState();
   state.value = s;
   Object.assign(light, s.lighting);
+  if (s.section) Object.assign(section, s.section);
   if (selected.value) selected.value = props.viewer.getNodeInfo(selected.value.id);
 }
 
@@ -334,7 +403,11 @@ watch(
   () => props.viewer,
   (v) => {
     if (!v) return;
-    v.onChange = (s) => { state.value = s; Object.assign(light, s.lighting); };
+    v.onChange = (s) => {
+      state.value = s;
+      Object.assign(light, s.lighting);
+      if (s.section) Object.assign(section, s.section);
+    };
     v.onPick = (id) => select(id);
     v.onLighting = (l) => Object.assign(light, l);
     sync();
@@ -436,6 +509,17 @@ function resetLight() {
   props.viewer?.setLighting({ time: light.time });
   sync();
 }
+
+function setSection(key, value) {
+  if (!props.viewer) return;
+  props.viewer.setSection({ [key]: value });
+  sync();
+}
+
+function resetSection() {
+  props.viewer?.setSection({ enabled: false, axis: 'z', offset: 50, flip: false, cap: true });
+  sync();
+}
 </script>
 
 <style scoped>
@@ -466,13 +550,13 @@ function resetLight() {
 .tag.bad { border-color: rgba(226, 121, 97, 0.4); color: #e8a596; background: rgba(226, 121, 97, 0.08); }
 
 .tabs {
-  display: flex; gap: 4px; padding: 0 10px 7px; flex: 0 0 auto;
+  display: flex; gap: 3px; padding: 0 9px 7px; flex: 0 0 auto;
   border-bottom: 1px solid var(--line);
 }
 .tabs button {
-  flex: 1 1 0; min-width: 0; height: 32px; border-radius: 7px;
-  display: flex; align-items: center; justify-content: center; gap: 5px;
-  font-size: 11.5px; color: #8493a2; background: #171e28; border: 1px solid transparent;
+  flex: 1 1 0; min-width: 0; height: 30px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  font-size: 11px; color: #8493a2; background: #171e28; border: 1px solid transparent;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .tabs button:hover { color: #cdd9e5; background: #1b232e; }
@@ -680,6 +764,14 @@ table.floors tr:last-child td { border-bottom: 0; }
   background: rgba(213, 163, 92, 0.1);
 }
 .toggle-line b { font-weight: 500; font-size: 10.5px; }
+.hint { margin: 9px 0 0; font-size: 10px; line-height: 1.6; color: #6f7d8b; }
+.quick-row { display: flex; gap: 5px; margin-top: 9px; }
+.quick-row button {
+  flex: 1 1 0; font-size: 10px; line-height: 24px; border-radius: 6px;
+  border: 1px solid #2c3745; color: #9fb0c0; background: #171e28;
+}
+.quick-row button:hover { color: #f1e4cd; border-color: rgba(213, 163, 92, 0.4); }
+.slider-row.wide-label { grid-template-columns: 34px minmax(0, 1fr) 40px; }
 .wide-btn {
   width: 100%; font-size: 11px; line-height: 30px; border-radius: 7px;
   border: 1px solid var(--line); color: #a9b7c5; background: #171e28;
