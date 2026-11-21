@@ -50,6 +50,11 @@
         </div>
       </div>
 
+      <div class="row">
+        <label>视觉模型（可选，留空=复用上面的模型）</label>
+        <input v-model="form.visionModel" placeholder="qwen2.5vl:7b / llava / 留空" :disabled="form.type === 'local' || !form.vision" />
+      </div>
+
       <div class="row inline">
         <label class="check">
           <input v-model="form.vision" type="checkbox" />
@@ -80,7 +85,7 @@ import { getSettings, saveSettings, testProvider } from '../api.js';
 
 const emit = defineEmits(['close', 'saved']);
 const form = reactive({
-  type: 'auto', baseUrl: '', model: '', apiKey: '', temperature: 0.9, reasoning: 'no_think', vision: true,
+  type: 'auto', baseUrl: '', model: '', visionModel: '', apiKey: '', temperature: 0.9, reasoning: 'no_think', vision: true,
 });
 const testing = ref(false);
 const saving = ref(false);
@@ -109,6 +114,7 @@ async function load() {
       temperature: s.provider?.temperature ?? 0.9,
       reasoning: s.provider?.reasoning || 'no_think',
       vision: s.provider?.vision !== false,
+      visionModel: s.provider?.visionModel || '',
     });
   } catch {
     /* keep defaults */

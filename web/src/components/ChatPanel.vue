@@ -62,7 +62,10 @@
         <button class="attach-x" title="移除参考图" @click="clearAttachment">×</button>
       </div>
       <div v-if="reference" class="ref-chip">
-        <span>参考图：{{ reference.analysis?.description || reference.analysis?.style }}</span>
+        <span class="ref-src" :class="reference.analysis?.source" :title="reference.analysis?.vision?.reason || ''">
+          {{ reference.analysis?.source === 'vision' ? `视觉 · ${reference.analysis.model || '模型'}` : (reference.analysis?.source === 'palette' ? '主色匹配' : '默认风格') }}
+        </span>
+        <span class="ref-text">{{ reference.analysis?.description || reference.analysis?.style }}</span>
         <a :href="reference.url" target="_blank" rel="noreferrer">查看</a>
       </div>
       <textarea
@@ -454,11 +457,18 @@ onUnmounted(() => controller?.abort());
 .attach-meta em { font-style: normal; font-size: 10px; color: #6f7d8b; }
 .attach-x { color: #7d8b99; font-size: 15px; padding: 0 4px; }
 .ref-chip {
-  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  display: flex; align-items: center; gap: 8px;
   font-size: 10.5px; color: #8fa0b1; border: 1px dashed #2c3745; border-radius: 8px;
   padding: 5px 8px; margin-bottom: 8px;
 }
-.ref-chip a { color: var(--accent); text-decoration: none; }
+.ref-chip a { color: var(--accent); text-decoration: none; flex: 0 0 auto; }
+.ref-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-src {
+  flex: 0 0 auto; font-size: 9.5px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid #2c3745; color: #9fb0c0;
+}
+.ref-src.vision { border-color: rgba(95, 191, 139, 0.4); color: #9fe0bd; }
+.ref-src.palette { border-color: rgba(213, 163, 92, 0.35); color: #d5a35c; }
 .ref-thumb { display: block; max-width: 100%; max-height: 150px; border-radius: 7px; margin-bottom: 7px; }
 .left-tools { display: flex; align-items: center; gap: 10px; }
 .attach-btn {

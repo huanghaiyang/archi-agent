@@ -216,6 +216,7 @@ const server = http.createServer(async (req, res) => {
         model: config.provider.model,
         baseUrl: config.provider.baseUrl,
         vision: Boolean(config.provider.vision),
+        visionModel: config.provider.visionModel || config.provider.model,
         hy4: { baseUrl: config.provider.baseUrl, model: config.provider.model, reasoning: config.provider.reasoning, ...probe },
         build: fs.existsSync(DIST),
         sessions: sessions.size,

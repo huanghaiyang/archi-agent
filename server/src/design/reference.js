@@ -5,7 +5,8 @@
 
 import { MATERIALS } from './palette.js';
 import { PROGRAMMES, STYLES } from './generator.js';
-import { chat, probeModel, supportsVision } from '../agent/llm.js';
+import { chat, probeModel, supportsVision, visionProvider } from '../agent/llm.js';
+import { config } from '../config.js';
 
 const STYLE_PHRASE = {
   minimal: '极简白墙',
@@ -95,10 +96,30 @@ const normalizeJson = (text) => {
  */
 export async function analyzeReference({ image, palette = [], hint = '' } = {}) {
   const paletteGuess = styleFromPalette(palette);
+  const visionMeta = {
+    enabled: supportsVision(),
+    model: config.provider.visionModel || config.provider.model,
+    used: false,
+    reachable: null,
+    reason: '',
+  };
 
   if (image && supportsVision()) {
     const probe = await probeModel();
+    visionMeta.reachable = Boolean(probe.reachable);
     if (probe.reachable) {
+      // in auto mode the reachable endpoint may be a candidate (e.g. Ollama),
+      // so aim the vision call at the endpoint that actually answered
+      const base = {
+        ...config.provider,
+        baseUrl: probe.baseUrl || config.provider.baseUrl,
+        type: probe.provider || config.provider.type,
+        model: probe.model || config.provider.model,
+      };
+      const vp = visionProvider(base);
+      const known = Array.isArray(probe.models) ? probe.models : [];
+      const model = known.includes(vp.model) ? vp.model : (known[0] || vp.model);
+      visionMeta.model = model;
       try {
         const res = await chat({
           messages: [{
@@ -110,9 +131,12 @@ export async function analyzeReference({ image, palette = [], hint = '' } = {}) 
           }],
           temperature: 0.2,
           maxTokens: 600,
+          provider: { ...vp, baseUrl: base.baseUrl, type: base.type },
+          model,
         });
         const parsed = normalizeJson(res.content);
         if (parsed) {
+          visionMeta.used = true;
           return {
             programme: PROGRAMMES[parsed.programme] ? parsed.programme : 'library',
             style: STYLES[parsed.style] ? parsed.style : paletteGuess.style,
@@ -120,13 +144,19 @@ export async function analyzeReference({ image, palette = [], hint = '' } = {}) 
             materials: Array.isArray(parsed.materials) ? parsed.materials.slice(0, 6) : [],
             description: String(parsed.description || '').slice(0, 120),
             source: 'vision',
-            model: configModel(probe),
+            model,
+            vision: visionMeta,
           };
         }
-      } catch {
-        /* fall through to the palette guess */
+        visionMeta.reason = '模型未按要求返回 JSON';
+      } catch (err) {
+        visionMeta.reason = err.message || '视觉请求失败';
       }
+    } else {
+      visionMeta.reason = probe.reason || '模型服务不可达';
     }
+  } else if (!supportsVision()) {
+    visionMeta.reason = '视觉已关闭或处于本地设计引擎模式';
   }
 
   return {
@@ -135,14 +165,11 @@ export async function analyzeReference({ image, palette = [], hint = '' } = {}) 
     floors: null,
     materials: [],
     description: paletteGuess.source === 'palette'
-      ? '按参考图主色匹配了最近的材质与风格（未启用视觉模型）'
+      ? `按参考图主色匹配了最近的材质与风格${visionMeta.reason ? `（${visionMeta.reason}）` : '（未启用视觉模型）'}`
       : '未启用视觉模型，使用默认风格',
     source: paletteGuess.source,
+    vision: visionMeta,
   };
-}
-
-function configModel(probe) {
-  return probe?.model || probe?.provider || '';
 }
 
 const PROGRAMME_WORDS = {

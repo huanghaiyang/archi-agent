@@ -66,15 +66,16 @@ export async function probeModel() {
   return primary;
 }
 
-export async function chat({ messages, tools, temperature, maxTokens, signal, provider: override }) {
+export async function chat({ messages, tools, temperature, maxTokens, signal, provider: override, model }) {
   const provider = override || config.provider;
+  const modelName = model || provider.model;
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), provider.timeoutMs || 180000);
 
   const body = {
-    model: provider.model,
+    model: modelName,
     messages,
     temperature: temperature ?? provider.temperature,
     top_p: provider.topP,
@@ -126,6 +127,11 @@ export async function chat({ messages, tools, temperature, maxTokens, signal, pr
 /** True when the active provider is expected to accept image_url content. */
 export function supportsVision() {
   return Boolean(config.provider.vision) && config.provider.type !== 'local' && config.mode !== 'local';
+}
+
+/** Provider clone pointed at the dedicated vision model, if one is configured. */
+export function visionProvider(provider = config.provider) {
+  return { ...provider, model: provider.visionModel || provider.model };
 }
 
 export { LLMError };

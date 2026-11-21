@@ -28,6 +28,9 @@ const defaults = {
     reasoning: env.MODEL_REASONING || env.HY4_REASONING || 'no_think',
     timeoutMs: Number(env.MODEL_TIMEOUT_MS || env.HY4_TIMEOUT_MS || 180000),
     vision: (env.MODEL_VISION || '1') !== '0',
+    // optional separate vision model (e.g. qwen2.5vl / llava on Ollama);
+    // empty means "reuse provider.model"
+    visionModel: env.MODEL_VISION_MODEL || '',
   },
   maxSteps: Number(env.AGENT_MAX_STEPS || 12),
   // candidate endpoints probed in order when provider.type === 'auto'
@@ -89,8 +92,11 @@ export function saveSettings(patch = {}) {
   if (patch.maxSteps) config.maxSteps = Math.min(24, Math.max(2, Number(patch.maxSteps)));
   if (patch.provider && typeof patch.provider === 'object') {
     const p = patch.provider;
-    for (const key of ['type', 'baseUrl', 'apiKey', 'model', 'reasoning']) {
-      if (typeof p[key] === 'string' && p[key].trim()) config.provider[key] = p[key].trim();
+    for (const key of ['type', 'baseUrl', 'apiKey', 'model', 'reasoning', 'visionModel']) {
+      if (typeof p[key] === 'string') {
+        // visionModel may deliberately be cleared to fall back to the main model
+        if (key === 'visionModel' || p[key].trim()) config.provider[key] = p[key].trim();
+      }
     }
     for (const key of ['temperature', 'topP', 'maxTokens', 'timeoutMs']) {
       if (p[key] != null && !Number.isNaN(Number(p[key]))) config.provider[key] = Number(p[key]);

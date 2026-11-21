@@ -49,6 +49,7 @@
             <button class="toggle" :class="{ on: opts.labels }" @click="toggle('labels')">房间名</button>
             <button class="toggle" :class="{ on: opts.explode }" @click="toggle('explode')">爆炸</button>
             <button class="toggle" :class="{ on: opts.context }" @click="toggle('context')">周边</button>
+            <button class="toggle wire" :class="{ on: opts.wireframe }" @click="toggle('wireframe')">线框</button>
           </div>
 
           <div class="group grow">
@@ -79,20 +80,24 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ArchiViewer } from '../scene/ArchiViewer.js';
 
 const props = defineProps({ spec: { type: Object, default: null } });
+const emit = defineEmits(['viewer', 'pick']);
 
 const canvas = ref(null);
 const view = ref('iso');
-const opts = reactive({ roof: true, labels: false, explode: false, context: true, time: 'day', isolate: 0 });
+const opts = reactive({ roof: true, labels: false, explode: false, context: true, time: 'day', isolate: 0, wireframe: false });
 let viewer = null;
 
 onMounted(() => {
   viewer = new ArchiViewer(canvas.value);
   window.__archiViewer = viewer; // handy for debugging / demos in the console
+  viewer.onPick = (id) => emit('pick', id);
+  emit('viewer', viewer);
   if (props.spec) applySpec(props.spec);
   viewer.setOption('roof', opts.roof);
   viewer.setOption('labels', opts.labels);
   viewer.setOption('context', opts.context);
   viewer.setOption('time', opts.time);
+  viewer.setOption('wireframe', opts.wireframe);
 });
 
 watch(
@@ -111,6 +116,7 @@ function applySpec(spec) {
   viewer.setOption('time', opts.time);
   viewer.setOption('isolate', opts.isolate);
   viewer.setOption('explode', opts.explode);
+  viewer.setOption('wireframe', opts.wireframe);
   viewer.frame(view.value);
 }
 

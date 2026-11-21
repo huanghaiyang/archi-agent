@@ -47,8 +47,8 @@
         />
       </section>
 
-      <SceneView :spec="spec" class="viewer" />
-      <MetricsPanel :spec="spec" class="metrics" />
+      <SceneView :spec="spec" class="viewer" @viewer="onViewer" />
+      <MetricsPanel :spec="spec" :viewer="viewer" class="metrics" />
     </main>
 
     <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" @saved="refreshHealth" />
@@ -56,7 +56,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
 import ChatPanel from './components/ChatPanel.vue';
 import SceneView from './components/SceneView.vue';
 import MetricsPanel from './components/MetricsPanel.vue';
@@ -72,6 +72,11 @@ const settingsOpen = ref(false);
 const libraryCount = ref(0);
 const trashCount = ref(0);
 const chat = ref(null);
+const viewer = shallowRef(null);
+
+function onViewer(instance) {
+  viewer.value = instance;
+}
 
 const providerLabel = computed(() => {
   const type = health.value?.provider || 'local';

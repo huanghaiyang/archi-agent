@@ -134,7 +134,7 @@ ollama serve
 MODEL_PROVIDER=ollama MODEL_NAME=qwen2.5:7b npm start
 ```
 
-设置面板里的「测试连接」是 5s 探测（`/api/settings/test`），只验证 `/models` 或一次轻量补全能否返回，不代表模型会设计房子。`GET /api/health` 会回报 `provider / model / baseUrl / vision / hy4.reachable`。
+设置面板里的「测试连接」是 5s 探测（`/api/settings/test`），只验证 `/models` 或一次轻量补全能否返回，不代表模型会设计房子。`GET /api/health` 会回报 `provider / model / baseUrl / vision / visionModel / hy4.reachable`。
 
 ## 参考图出方案
 
@@ -145,6 +145,8 @@ MODEL_PROVIDER=ollama MODEL_NAME=qwen2.5:7b npm start
 3. 拼成任务书交给 Agent，**但用户在输入框里写的功能与层数优先**——写「做 6 层住宅」，参考图不会把它改成「4 层图书馆」。
 
 参考图会落盘到 `server/data/refs/`，随会话一起恢复；`POST /api/reference` 可以只解析不生成方案。
+
+视觉模型可以单独指定：设置面板「视觉模型」留空则复用主模型，填 `qwen2.5vl:7b` / `llava` 这类小模型即可让主模型（如 Hy4）专心做设计、视觉走另一条端点。解析结果会带 `analysis.source`（`vision` / `palette` / `default`）、`analysis.model` 和 `analysis.vision{enabled,reachable,used,reason}`，输入框上方的参考图条会显示「视觉 · 模型名」或「主色匹配」，悬停可看回退原因。没装真实 VLM 时可以用 `npm run mock:vision` + `npm run test:vision` 验证整条链路（会临时起一个 OpenAI 兼容 mock 和一个隔离的 API 实例，不碰本机设置）。
 
 ## 参数化提示词（prompt builder）
 
@@ -241,7 +243,7 @@ server/src/design/    generator（程序化设计）、spec（校验合并）、
 shared/               facade.js：窗洞几何 + 面积，服务端与渲染器共用
 web/src/scene/        ArchiViewer.js（编排）+ textures/batch/materials/facade/interior/roof/site 七个模块
 web/src/components/   ChatPanel / SceneView / MetricsPanel
-scripts/              dev.js（并行启动）、smoke.js（端到端自检）、mock-hy4.js + test-hy4-loop.js
+scripts/              dev.js（并行启动）、smoke.js（端到端自检）、mock-hy4.js + test-hy4-loop.js、mock-vision.js + test-vision.js
 docs/                 运行截图
 ```
 
@@ -256,7 +258,13 @@ docs/                 运行截图
 - `interior.js`：内隔墙（带门洞）、核心筒（踏步 + 休息平台 + 栏杆 + 电梯井与厅门）、按房间类型的家具（书架、阅览桌 + 椅、办公桌组、会议长桌、接待台、展板、课桌、床/沙发、湿区隔断、机柜）。
 - `roof.js`：平屋顶女儿墙 + 金属压顶 + 屋面机组/风管/采光天窗/雨水口/光伏阵列；坡屋顶脊瓦 + 檐口封边 + 天沟 + 山墙封板；退台形成的屋顶露台木平台 + 玻璃栏板。
 - `site.js`：场地铺地、南侧街道与斑马线、绿化带/绿篱、乔木（树干 + 多层树冠）、长椅、阻车柱、路灯、停车、入口步道、接触阴影、用地红线。
-- 交互：轴测 / 正立面 / 俯视，日 / 黄昏 / 夜（夜间玻璃自发光），屋顶、房间名、爆炸视图、周边体量、楼层隔离滑杆；导出 **GLB**。
+- 交互：轴测 / 正立面 / 俯视，日 / 黄昏 / 夜（夜间玻璃自发光），屋顶、房间名、爆炸视图、周边体量、线框、楼层隔离滑杆；导出 **GLB**（只导出可见节点，删掉的构件不会进文件）。
+
+右栏检查器（`MetricsPanel`）分三个页签：
+
+- **指标**：GFA / 容积率 / 密度 / 窗地比 / 高度 / 造价、规范校核、楼层表、立面配置、设计说明，另有场景统计（三角面、材质数、draw call、光源数、隐藏节点、线框开关）。
+- **节点**：按语义组织的节点树（场地与景观 → 建筑主体 → 各层 → 材质桶 → 房间名 / 周边体量），点一行就在三维里用金色 `BoxHelper` 高亮，并展开尺寸、三角面、子节点、楼层、材质键；行内可隐藏/删除，工具条有撤销 / 重做 / 恢复（栈上限 120 步，楼层隔离和屋顶开关不会把删掉的节点"复活"）。
+- **光照**：时间预设（日 / 黄昏 / 夜）、方位角、高度角、太阳强度、天光、补光、环境贴图、曝光、阴影（关 / 柔和 2048 / 高精度 4096）、夜间室内灯，全部实时生效。
 
 开窗口径仍由 `shared/facade.js` 统一计算，所以立面上的玻璃面积和右栏"窗地比"永远对得上。
 
