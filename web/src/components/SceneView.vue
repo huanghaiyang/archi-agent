@@ -50,6 +50,7 @@
             <button class="toggle" :class="{ on: opts.explode }" @click="toggle('explode')">爆炸</button>
             <button class="toggle" :class="{ on: opts.context }" @click="toggle('context')">周边</button>
             <button class="toggle wire" :class="{ on: opts.wireframe }" @click="toggle('wireframe')">线框</button>
+            <button class="toggle" :class="{ on: opts.section }" @click="toggleSection">剖切</button>
           </div>
 
           <div class="group grow">
@@ -70,7 +71,7 @@
         </div>
       </div>
 
-      <div class="overlay bottom-right hint">拖拽旋转 · 滚轮缩放 · 右键平移</div>
+      <div class="overlay bottom-right hint">拖拽旋转 · 滚轮缩放 · 右键平移<span v-if="opts.section"> · 拖动橙色切面移动剖切</span></div>
     </template>
   </section>
 </template>
@@ -84,13 +85,20 @@ const emit = defineEmits(['viewer', 'pick']);
 
 const canvas = ref(null);
 const view = ref('iso');
-const opts = reactive({ roof: true, labels: false, explode: false, context: true, time: 'day', isolate: 0, wireframe: false });
+const opts = reactive({ roof: true, labels: false, explode: false, context: true, time: 'day', isolate: 0, wireframe: false, section: false });
 let viewer = null;
 
 onMounted(() => {
   viewer = new ArchiViewer(canvas.value);
   window.__archiViewer = viewer; // handy for debugging / demos in the console
   viewer.onPick = (id) => emit('pick', id);
+  // The inspector owns its own onChange slot; subscribe so toolbar toggles
+  // mirror panel changes and vice versa.
+  viewer.subscribe((s) => {
+    opts.wireframe = Boolean(s.wireframe);
+    opts.time = s.lighting?.time || opts.time;
+    opts.section = Boolean(s.section?.enabled);
+  });
   emit('viewer', viewer);
   if (props.spec) applySpec(props.spec);
   viewer.setOption('roof', opts.roof);
@@ -145,6 +153,10 @@ function setIsolate(v) {
 function setView(v) {
   view.value = v;
   viewer?.frame(v);
+}
+
+function toggleSection() {
+  viewer?.setSection({ enabled: !opts.section });
 }
 
 async function exportGlb() {
@@ -230,7 +242,7 @@ canvas { display: block; width: 100%; height: 100%; }
 }
 .group { display: flex; align-items: center; gap: 8px; }
 .group.grow { flex: 1; min-width: 170px; }
-.glabel { font-size: 10.5px; letter-spacing: 0.1em; color: #7d8b99; }
+.glabel { font-size: 10.5px; letter-spacing: 0.1em; color: #7d8b99; white-space: nowrap; }
 .toggle {
   padding: 4px 10px;
   border-radius: 7px;

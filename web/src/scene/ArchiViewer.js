@@ -110,11 +110,56 @@ export class ArchiViewer {
     canvas.addEventListener('pointerdown', this._onPointerDown);
     canvas.addEventListener('pointerup', this._onPointerUp);
 
+    // Drag the visible cut plane to move the section; orbiting still works
+    // everywhere else (and stops while a cut drag is in progress).
+    this._sectionDrag = null;
+    this._lastSectionNotify = 0;
+    this._onSectionDown = (e) => {
+      if (!this.section.enabled || e.button !== 0) return;
+      if (!this.sectionHit(e)) return;
+      this._sectionDrag = { pointerId: e.pointerId };
+      this.controls.enabled = false;
+      canvas.style.cursor = 'grabbing';
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    };
+    this._onSectionMove = (e) => {
+      if (!this._sectionDrag) {
+        if (!this.section.enabled) {
+          if (canvas.style.cursor === 'grab') canvas.style.cursor = '';
+          return;
+        }
+        canvas.style.cursor = this.sectionHit(e) ? 'grab' : '';
+        return;
+      }
+      if (e.pointerId !== this._sectionDrag.pointerId) return;
+      this.dragSectionTo(e);
+      const now = Date.now();
+      if (now - this._lastSectionNotify > 30) {
+        this._lastSectionNotify = now;
+        this.notify();
+      }
+      e.preventDefault();
+    };
+    this._onSectionUp = (e) => {
+      if (!this._sectionDrag) return;
+      if (e.pointerId != null && e.pointerId !== this._sectionDrag.pointerId) return;
+      this._sectionDrag = null;
+      this.controls.enabled = true;
+      canvas.style.cursor = '';
+      this.notify();
+    };
+    canvas.addEventListener('pointerdown', this._onSectionDown, true);
+    window.addEventListener('pointermove', this._onSectionMove);
+    window.addEventListener('pointerup', this._onSectionUp);
+    window.addEventListener('pointercancel', this._onSectionUp);
+
     this.options = { roof: true, labels: false, isolate: 0, explode: false, time: 'day', context: true, wireframe: false };
     this.section = { enabled: false, axis: 'z', offset: 50, flip: false, cap: true };
     this.sectionRange = { x: [0, 1], y: [0, 1], z: [0, 1] };
     this.sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
     this.sectionHelper = null;
+    this.changeListeners = new Set();
     this.spec = null;
     this.mats = null;
     this.floorGroups = [];
@@ -549,6 +594,51 @@ export class ArchiViewer {
     return min + (max - min) * t;
   }
 
+  sectionHit(event) {
+    if (!this.sectionHelper) return false;
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    return this.raycaster.intersectObject(this.sectionHelper, true).length > 0;
+  }
+
+  /** Move the cut plane so it passes through the mouse ray. */
+  dragSectionTo(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+
+    const axis = this.section.axis;
+    const pos = this.sectionPosition();
+    const point = (this.sectionCenter || new THREE.Vector3()).clone();
+    point[axis] = pos;
+    const camDir = new THREE.Vector3();
+    this.camera.getWorldDirection(camDir);
+    const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, point);
+    const hit = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(dragPlane, hit)) return;
+
+    const [min, max] = this.sectionRange[axis] || [0, 1];
+    const offset = THREE.MathUtils.clamp(((hit[axis] - min) / (max - min)) * 100, 0, 100);
+    this.section.offset = offset;
+    this.updateSectionPlane();
+  }
+
+  /** Cheap update used while dragging: no geometry rebuild. */
+  updateSectionPlane() {
+    if (!this.section.enabled) return;
+    const axis = this.section.axis;
+    const pos = this.sectionPosition();
+    this.sectionPlane.constant = -this.sectionPlane.normal.dot(new THREE.Vector3(
+      axis === 'x' ? pos : 0,
+      axis === 'y' ? pos : 0,
+      axis === 'z' ? pos : 0,
+    ));
+    if (this.sectionHelper) this.sectionHelper.position[axis] = pos;
+  }
+
   applySection() {
     const S = this.section;
     const mats = this.mats ? [...this.mats.cache.values()] : [];
@@ -567,7 +657,7 @@ export class ArchiViewer {
     const pos = this.sectionPosition();
     const normal = new THREE.Vector3(
       S.axis === 'x' ? 1 : 0,
-      S.axis === 'y' ? 1 : 0,
+      S.axis === 'y' ? -1 : 0, // horizontal cut keeps the lower floors by default
       S.axis === 'z' ? 1 : 0,
     );
     if (S.flip) normal.negate();
@@ -857,8 +947,16 @@ export class ArchiViewer {
     };
   }
 
+  /** Extra change listeners; keeps SceneView's toolbar and the inspector in sync. */
+  subscribe(fn) {
+    this.changeListeners.add(fn);
+    return () => this.changeListeners.delete(fn);
+  }
+
   notify() {
-    if (typeof this.onChange === 'function') this.onChange(this.getState());
+    const state = this.getState();
+    if (typeof this.onChange === 'function') this.onChange(state);
+    for (const fn of this.changeListeners) fn(state);
   }
 
   pickAt(event) {
@@ -999,6 +1097,11 @@ export class ArchiViewer {
     window.removeEventListener('resize', this._onResize);
     this.canvas.removeEventListener('pointerdown', this._onPointerDown);
     this.canvas.removeEventListener('pointerup', this._onPointerUp);
+    this.canvas.removeEventListener('pointerdown', this._onSectionDown, true);
+    window.removeEventListener('pointermove', this._onSectionMove);
+    window.removeEventListener('pointerup', this._onSectionUp);
+    window.removeEventListener('pointercancel', this._onSectionUp);
+    this.changeListeners.clear();
     this.observer?.disconnect();
     this.disposeBuilding();
     this.controls.dispose();

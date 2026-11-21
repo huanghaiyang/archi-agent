@@ -224,7 +224,7 @@
               <span>半透明剖切面</span>
               <b>{{ section.cap ? '显示' : '隐藏' }}</b>
             </button>
-            <p class="hint">橙色薄面标出切割位置；拖动位置时实时更新，不重建模型。</p>
+            <p class="hint">橙色薄面标出切割位置；在舞台上直接拖动该切面即可移动剖切，不重建模型。</p>
           </div>
 
           <div class="section">
@@ -342,7 +342,10 @@ const axes = [
   { key: 'z', label: '纵剖 Z' },
 ];
 const quickCuts = [25, 50, 75];
-const cutSideLabel = computed(() => `保留 ${section.flip ? '-' : '+'}${String(section.axis).toUpperCase()} 侧`);
+const cutSideLabel = computed(() => {
+  if (section.axis === 'y') return section.flip ? '保留上部' : '保留下部';
+  return `保留 ${section.flip ? '-' : '+'}${String(section.axis).toUpperCase()} 侧`;
+});
 
 const FACADE_LABEL = { punched: '点式开洞', ribbon: '水平条窗', curtain: '玻璃幕墙', screen: '竖向内凹格栅' };
 const ROOF_LABEL = { flat: '平屋顶', gable: '双坡屋顶', shed: '单坡屋顶', hip: '四坡屋顶' };
