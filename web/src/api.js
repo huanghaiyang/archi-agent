@@ -59,10 +59,12 @@ export const testProvider = (provider) => req('/api/settings/test', {
   body: JSON.stringify({ provider }),
 });
 
+export const getLocalVisionStatus = () => req('/api/vision/local');
+
 // ----------------------------------------------------------------- reference
-export const analyzeReferenceImage = ({ image, palette, message, dimensions }) => req('/api/reference', {
+export const analyzeReferenceImage = ({ image, palette, message, dimensions, analysis }) => req('/api/reference', {
   method: 'POST',
-  body: JSON.stringify({ image, palette, message, dimensions }),
+  body: JSON.stringify({ image, palette, message, dimensions, analysis }),
 });
 
 // ------------------------------------------------------------------- library
@@ -108,11 +110,11 @@ export const designFromPrompt = (params, mode = 'auto') => req('/api/prompt/desi
   body: JSON.stringify({ params, mode, sid: SID }),
 });
 
-export async function chatStream({ message, mode, image, palette, dimensions, onEvent, signal }) {
+export async function chatStream({ message, mode, image, palette, dimensions, analysis, onEvent, signal }) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, mode, sid: SID, image, palette, dimensions }),
+    body: JSON.stringify({ message, mode, sid: SID, image, palette, dimensions, analysis }),
     signal,
   });
   if (!res.ok || !res.body) {

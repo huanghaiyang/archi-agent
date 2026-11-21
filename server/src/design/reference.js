@@ -94,6 +94,31 @@ const normalizeJson = (text) => {
 /**
  * @returns {programme, style, floors, materials, description, source}
  */
+/** Accept an analysis produced in the browser by the local ONNX model.
+ *  Values are clamped against the same enums the server-side path uses, so a
+ *  hallucinated programme/style can never reach the generator unchecked. */
+export function adoptLocalAnalysis(local, { palette = [], model = 'qwen2-vl-2b-instruct' } = {}) {
+  const guess = styleFromPalette(palette);
+  const p = local || {};
+  return {
+    programme: PROGRAMMES[p.programme] ? p.programme : null,
+    style: STYLES[p.style] ? p.style : guess.style,
+    floors: p.floors ? Math.min(12, Math.max(1, Number(p.floors) || 0)) || null : null,
+    materials: Array.isArray(p.materials) ? p.materials.slice(0, 6).map((m) => String(m).slice(0, 32)) : [],
+    description: String(p.description || '').slice(0, 120),
+    source: 'browser',
+    model,
+    vision: {
+      enabled: true,
+      used: true,
+      reachable: true,
+      source: 'browser-onnx',
+      model,
+      reason: '',
+    },
+  };
+}
+
 export async function analyzeReference({ image, palette = [], hint = '' } = {}) {
   const paletteGuess = styleFromPalette(palette);
   const visionMeta = {

@@ -51,7 +51,7 @@
       <MetricsPanel :spec="spec" :viewer="viewer" class="inspector-col" />
     </main>
 
-    <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" @saved="refreshHealth" />
+    <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" @saved="onSettingsSaved" />
   </div>
 </template>
 
@@ -76,6 +76,11 @@ const viewer = shallowRef(null);
 
 function onViewer(instance) {
   viewer.value = instance;
+}
+
+function onSettingsSaved() {
+  refreshHealth();
+  chat.value?.refreshLocalVision?.();
 }
 
 const providerLabel = computed(() => {

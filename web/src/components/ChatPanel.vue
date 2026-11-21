@@ -58,12 +58,13 @@
         <div class="attach-meta">
           <span>{{ attached.name }}</span>
           <em>{{ attached.palette.length ? `主色 ${attached.palette.slice(0, 4).join(' ')}` : '主色分析中…' }}</em>
+          <em v-if="localVision.enabled && localVision.installed" class="local-badge">本地视觉 · SmolVLM 500M</em>
         </div>
         <button class="attach-x" title="移除参考图" @click="clearAttachment">×</button>
       </div>
       <div v-if="reference" class="ref-chip">
         <span class="ref-src" :class="reference.analysis?.source" :title="reference.analysis?.vision?.reason || ''">
-          {{ reference.analysis?.source === 'vision' ? `视觉 · ${reference.analysis.model || '模型'}` : (reference.analysis?.source === 'palette' ? '主色匹配' : '默认风格') }}
+          {{ reference.analysis?.source === 'vision' ? `视觉 · ${reference.analysis.model || '模型'}` : reference.analysis?.source === 'browser' ? '本地视觉 · SmolVLM' : (reference.analysis?.source === 'palette' ? '主色匹配' : '默认风格') }}
         </span>
         <span class="ref-text">{{ reference.analysis?.description || reference.analysis?.style }}</span>
         <a :href="reference.url" target="_blank" rel="noreferrer">查看</a>
@@ -97,7 +98,8 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { chatStream, getSession, paletteFromImage, readFileAsDataUrl } from '../api.js';
+import { chatStream, getLocalVisionStatus, getSession, paletteFromImage, readFileAsDataUrl } from '../api.js';
+import { analyzeImageLocally, onVisionProgress } from '../vision/localVisionClient.js';
 import PromptBuilder from './PromptBuilder.vue';
 
 const props = defineProps({ mode: { type: String, default: 'auto' } });
@@ -113,7 +115,9 @@ const fileEl = ref(null);
 const attached = ref(null);
 const reference = ref(null);
 const builderOpen = ref(false);
+const localVision = ref({ enabled: false, installed: false, bytes: 0, model: null, missing: [] });
 let controller = null;
+let stopVisionProgress = null;
 
 const canSend = computed(() => Boolean(draft.value.trim() || attached.value) && !busy.value);
 
@@ -167,14 +171,17 @@ function send(text) {
   scroll();
 
   controller = new AbortController();
-  chatStream({
-    message: content,
-    mode: props.mode,
-    image,
-    palette,
-    signal: controller.signal,
-    onEvent: (event) => handle(event),
-  })
+  const signal = controller.signal;
+  runVisionIfAvailable(image)
+    .then((analysis) => chatStream({
+      message: content,
+      mode: props.mode,
+      image,
+      palette,
+      analysis,
+      signal,
+      onEvent: (event) => handle(event),
+    }))
     .catch((err) => {
       if (err.name === 'AbortError') return;
       currentTurn().parts.push({ type: 'text', text: `连接失败：${err.message}`, error: true });
@@ -186,6 +193,40 @@ function send(text) {
       if (attachment) URL.revokeObjectURL?.(attachment.objectUrl);
       scroll();
     });
+}
+
+async function refreshLocalVision() {
+  try { localVision.value = await getLocalVisionStatus(); } catch { /* server offline */ }
+}
+
+function onVisionTick(p) {
+  if (!busy.value) return;
+  if (p.status === 'inference') {
+    statusText.value = '本地视觉推理中（SmolVLM 500M · WASM）…';
+    return;
+  }
+  if (!p.total) return;
+  const pct = p.progress != null ? Math.round(p.progress) : Math.round((p.loaded / p.total) * 100);
+  const done = p.loaded ? `${(p.loaded / 1073741824).toFixed(2)} GB` : '';
+  statusText.value = `加载本地视觉模型 ${pct}%${done ? ` · ${done}` : ''}…`;
+}
+
+/** Local ONNX first, then the server's provider path as a safety net. */
+async function runVisionIfAvailable(image) {
+  if (!image || !localVision.value.enabled || !localVision.value.installed) return null;
+  statusText.value = '加载本地视觉模型…';
+  try {
+    const result = await analyzeImageLocally(image);
+    if (!result?.data) {
+      statusText.value = '本地视觉未返回 JSON，改用服务端解析…';
+      return null;
+    }
+    statusText.value = '本地视觉解析完成，生成任务书…';
+    return { ...result.data, model: 'smolvlm-500m-instruct' };
+  } catch (err) {
+    statusText.value = `本地视觉不可用（${err.message}），改用服务端解析…`;
+    return null;
+  }
 }
 
 function handle(event) {
@@ -306,8 +347,12 @@ async function refreshReference() {  try {
 }
 
 onMounted(loadHistory);
+onMounted(() => {
+  refreshLocalVision();
+  stopVisionProgress = onVisionProgress(onVisionTick);
+});
 
-defineExpose({ clear, send, refreshReference });
+defineExpose({ clear, send, refreshReference, refreshLocalVision });
 
 watch(messages, scroll, { deep: true });
 
@@ -318,7 +363,10 @@ function scroll() {
   });
 }
 
-onUnmounted(() => controller?.abort());
+onUnmounted(() => {
+  controller?.abort();
+  stopVisionProgress?.();
+});
 </script>
 
 <style scoped>
@@ -468,7 +516,9 @@ onUnmounted(() => controller?.abort());
   border: 1px solid #2c3745; color: #9fb0c0;
 }
 .ref-src.vision { border-color: rgba(95, 191, 139, 0.4); color: #9fe0bd; }
+.ref-src.browser { border-color: rgba(120, 156, 220, 0.45); color: #a9c4f2; }
 .ref-src.palette { border-color: rgba(213, 163, 92, 0.35); color: #d5a35c; }
+.local-badge { color: #a9c4f2 !important; }
 .ref-thumb { display: block; max-width: 100%; max-height: 150px; border-radius: 7px; margin-bottom: 7px; }
 .left-tools { display: flex; align-items: center; gap: 10px; }
 .attach-btn {

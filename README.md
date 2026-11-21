@@ -43,8 +43,18 @@
 
 ## 快速开始
 
+一条命令完成初始化（装依赖 + 下载浏览器视觉模型 + 构建前端）：
+
+```bash
+npm run init
+npm start               # http://127.0.0.1:8787
+```
+
+只想跑开发模式，不要模型：
+
 ```bash
 npm run install:all     # 安装 web 依赖（server 零依赖）
+npm run init -- --skip-model
 npm run dev             # 同时启动 agent server (:8787) 与 Vite (:5173)
 ```
 
@@ -134,7 +144,47 @@ ollama serve
 MODEL_PROVIDER=ollama MODEL_NAME=qwen2.5:7b npm start
 ```
 
-设置面板里的「测试连接」是 5s 探测（`/api/settings/test`），只验证 `/models` 或一次轻量补全能否返回，不代表模型会设计房子。`GET /api/health` 会回报 `provider / model / baseUrl / vision / visionModel / hy4.reachable`。
+设置面板里的「测试连接」是 5s 探测（`/api/settings/test`），只验证 `/models` 或一次轻量补全能否返回，不代表模型会设计房子。`GET /api/health` 会回报 `provider / model / baseUrl / vision / visionModel / localVision? / hy4.reachable`。
+
+## 本地视觉模型（浏览器 WASM + 服务端 ONNX）
+
+参考图不必再发给远端：项目内置一条完全在本机跑的视觉链路，模型下载到 `server/data/models/`，由同一个 8787 端口以 `/models/...` 提供，浏览器里用 onnxruntime-web 推理。
+
+**选型（双模型，各司其职）**：
+
+- **浏览器内**：`HuggingFaceTB/SmolVLM-500M-Instruct` 的 int8 ONNX 导出（`q8`，约 0.49 GB）。浏览器 WASM 堆只有 32 位 4 GB 上限，2B 级模型的权重加激活就会把渲染进程撑死（实测 Qwen2-VL-2B q8 在会话初始化阶段挂起），500M 模型能在 Web Worker 里稳定加载，几秒到几十秒出结果。
+- **服务端兜底 / 高质量**：`onnx-community/Qwen2-VL-2B-Instruct`（`q8`，约 2.3 GB）。Node 没有 WASM 4 GB 天花板，可以吃满 2B 模型，中文描述和细节判断更好；浏览器链路不可用时由服务端视觉接管。
+
+**下载 / 校验**：
+
+```bash
+npm run models:vision                 # 两个模型都下（q8，hf-mirror 优先，失败切 huggingface.co）
+npm run models:vision:browser         # 只下浏览器用的 SmolVLM 500M
+npm run models:vision:server          # 只下服务端用的 Qwen2-VL 2B
+npm run models:check                  # 只校验文件大小，不下载
+npm run models:vision -- --dry-run    # 打印机器信息、文件清单与总大小
+npm run models:vision -- --dtype=q4f16
+npm run models:vision -- --force      # 重新下载
+```
+
+脚本特性：按文件清单逐个下载，`.part` + HTTP Range 断点续传，4 秒进度行（百分比 / MB/s / ETA），`Content-Length` 校验，镜像失败自动换源重试，最后写 `manifest.json` 与 `models/index.json`。模型目录被 `.gitignore` 排除，不会进仓库。
+
+**初始化**：
+
+```bash
+npm run init                 # 1 检查 Node 20+ 2 装 web 依赖 3 校验/下载模型 4 构建
+npm run init -- --skip-model # 已有权重时跳过下载
+```
+
+`GET /api/vision/local` 返回是否安装、字节数、dtype 与缺失文件；`POST /api/settings` 里的 `provider.localVision=true` 打开开关（设置面板也有「浏览器本地视觉」勾选，未下载时禁用）。
+
+**运行时行为**：
+
+- 发消息带参考图且开关打开时，`web/src/vision/qwen.worker.js` 在 Web Worker 里加载 SmolVLM 500M（约 0.49 GB，从本机 `/models` 读，不发外网），把 JSON 开头 `{"programme":"` 预填进 chat template 强制模型续写结构化结果。
+- 进度（下载文件 / 百分比 / 推理阶段）会显示在输入框上方状态行；模型只加载一次，后续图片复用同一个 session。
+- 结果经 `/api/chat` 的 `analysis` 字段回传，服务端用 `adoptLocalAnalysis()` 按同一套枚举钳制 programme/style/floors，再拼任务书——模型胡说的值不会直接进生成器。
+- 本地推理失败、超时（3 分钟）或返回非 JSON 时自动回退到服务端视觉 / 主色匹配，不阻塞对话。
+- `npm run test:local-vision` 用同一份 `web/src/vision/smolVision.js` 在 Node（onnxruntime-node）里对 `docs/01-library-scheme.png` 跑一次真实推理并断言 JSON 结构；没有 GPU 也能验证下载、目录布局、chat template 与解析器。
 
 ## 参考图出方案
 

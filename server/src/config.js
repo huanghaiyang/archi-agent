@@ -31,6 +31,12 @@ const defaults = {
     // optional separate vision model (e.g. qwen2.5vl / llava on Ollama);
     // empty means "reuse provider.model"
     visionModel: env.MODEL_VISION_MODEL || '',
+    // use the downloaded browser/WASM model for reference images instead of
+    // asking the text provider. "auto" (the default) turns this on as soon as
+    // server/data/models/index.json exists.
+    localVision: env.MODEL_LOCAL_VISION
+      ? env.MODEL_LOCAL_VISION === '1'
+      : fs.existsSync(path.join(DATA_DIR, 'models', 'index.json')),
   },
   maxSteps: Number(env.AGENT_MAX_STEPS || 12),
   // candidate endpoints probed in order when provider.type === 'auto'
@@ -102,6 +108,7 @@ export function saveSettings(patch = {}) {
       if (p[key] != null && !Number.isNaN(Number(p[key]))) config.provider[key] = Number(p[key]);
     }
     if (typeof p.vision === 'boolean') config.provider.vision = p.vision;
+    if (typeof p.localVision === 'boolean') config.provider.localVision = p.localVision;
   }
   const payload = { mode: config.mode, provider: config.provider, maxSteps: config.maxSteps };
   const tmp = `${SETTINGS_FILE}.tmp`;

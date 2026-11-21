@@ -10,7 +10,7 @@ import { probeModel, probeProvider } from './agent/llm.js';
 import { createSession, runAgent } from './agent/loop.js';
 import { digest } from './agent/tools.js';
 import { finalize } from './design/spec.js';
-import { analyzeReference, referenceBrief } from './design/reference.js';
+import { analyzeReference, referenceBrief, adoptLocalAnalysis } from './design/reference.js';
 import { PROGRAMMES, STYLES } from './design/generator.js';
 import { PARAM_SCHEMA, composePrompt } from './design/promptParams.js';
 import {
@@ -32,6 +32,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 const DIST = path.join(ROOT, 'web', 'dist');
+const MODEL_DIR = path.join(config.dataDir, 'models');
 
 const sessions = new Map();
 
@@ -125,6 +126,86 @@ function serveMedia(res, pathname) {
   serveFile(res, file, 'public, max-age=86400');
 }
 
+/** /models/<repo>/<file> -> server/data/models/<repo>/<file> with Range support. */
+function serveModel(req, res, pathname) {
+  let rel;
+  try { rel = decodeURIComponent(pathname.replace(/^\/models\//, '')); } catch { rel = ''; }
+  const file = path.resolve(MODEL_DIR, rel);
+  if (!rel || !file.startsWith(MODEL_DIR + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' }).end('model file not found');
+    return;
+  }
+  const size = fs.statSync(file).size;
+  const ext = path.extname(file).replace(/^\.onnx.*/, '.onnx').toLowerCase();
+  const type = ext === '.json' ? 'application/json; charset=utf-8'
+    : ext === '.txt' ? 'text/plain; charset=utf-8'
+      : 'application/octet-stream';
+  const headers = {
+    'Content-Type': type,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Content-Length': size,
+  };
+  const range = req.headers.range && /bytes=(\d*)-(\d*)/.exec(req.headers.range);
+  if (range) {
+    const start = range[1] ? Number(range[1]) : 0;
+    const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start > end || start >= size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end();
+      return;
+    }
+    headers['Content-Length'] = end - start + 1;
+    headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+    res.writeHead(206, headers);
+    fs.createReadStream(file, { start, end }).pipe(res);
+    return;
+  }
+  res.writeHead(200, headers);
+  fs.createReadStream(file).pipe(res);
+}
+
+function localVisionStatus() {
+  const indexFile = path.join(MODEL_DIR, 'index.json');
+  let index = null;
+  try { index = JSON.parse(fs.readFileSync(indexFile, 'utf8')); } catch { /* not installed */ }
+  const entry = index?.models?.[0] || null;
+  let installed = false;
+  let bytes = 0;
+  let missing = [];
+  let fileCount = 0;
+  if (entry) {
+    let manifest = null;
+    try { manifest = JSON.parse(fs.readFileSync(path.join(MODEL_DIR, entry.dir, 'manifest.json'), 'utf8')); } catch { /* fall through */ }
+    if (manifest?.files?.length) {
+      fileCount = manifest.files.length;
+      for (const f of manifest.files) {
+        const file = path.join(MODEL_DIR, entry.dir, f.path);
+        try {
+          const size = fs.statSync(file).size;
+          bytes += size;
+          if (f.bytes && size !== f.bytes) missing.push(f.path);
+        } catch {
+          missing.push(f.path);
+        }
+      }
+      installed = missing.length === 0;
+    }
+  }
+  return {
+    enabled: Boolean(config.provider.localVision),
+    installed,
+    model: entry?.model || null,
+    modelId: entry?.dir || null,
+    dtype: entry?.dtype || null,
+    device: entry?.device || null,
+    bytes,
+    fileCount,
+    missing,
+    root: '/models/',
+    hint: installed ? '' : 'npm run models:vision',
+  };
+}
+
 function serveStatic(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const clean = decodeURIComponent(url.pathname);
@@ -178,17 +259,19 @@ async function handleChat(req, res, body) {
   let enriched = message;
   try {
     if (body.image) {
-      emit({ type: 'status', text: '正在读取参考图：功能、体量、材质与色彩…' });
+      emit({ type: 'status', text: body.analysis ? '浏览器本地视觉模型正在解析参考图…' : '正在读取参考图：功能、体量、材质与色彩…' });
       const referenceUrl = saveReferenceImage(body.image);
-      const analysis = await analyzeReference({
-        image: body.image,
-        palette: Array.isArray(body.palette) ? body.palette : [],
-        hint: message,
-      });
+      const analysis = body.analysis
+        ? adoptLocalAnalysis(body.analysis, { palette: body.palette || [], model: body.analysis.model })
+        : await analyzeReference({
+          image: body.image,
+          palette: Array.isArray(body.palette) ? body.palette : [],
+          hint: message,
+        });
       session.reference = { url: referenceUrl, analysis, at: Date.now(), dataUrl: body.image };
       emit({ type: 'reference', reference: session.reference });
       enriched = referenceBrief(analysis, { hint: message, dimensions: body.dimensions || {} });
-      emit({ type: 'status', text: `参考图解析：${analysis.description || analysis.style}（${analysis.source === 'vision' ? '视觉模型' : '主色匹配'}）` });
+      emit({ type: 'status', text: `参考图解析：${analysis.description || analysis.style}（${analysis.source === 'browser' ? '浏览器本地视觉' : analysis.source === 'vision' ? '视觉模型' : '主色匹配'}）` });
     }
     await runAgent({ session, message: enriched, mode: body.mode, emit });
     finalize(session.spec);
@@ -205,7 +288,15 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   const method = req.method;
 
+  // onnxruntime-web needs SharedArrayBuffer for its threaded WASM kernels; both
+  // headers are required for cross-origin isolation. Everything the viewer loads
+  // (models, assets) is same-origin, so require-corp is safe here.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+
   try {
+    if (method === 'GET' && p.startsWith('/models/')) return serveModel(req, res, p);
+
     // ---------------------------------------------------------------- system
     if (p === '/api/health') {
       const probe = await probeModel();
@@ -217,6 +308,7 @@ const server = http.createServer(async (req, res) => {
         baseUrl: config.provider.baseUrl,
         vision: Boolean(config.provider.vision),
         visionModel: config.provider.visionModel || config.provider.model,
+        localVision: config.provider.localVision,
         hy4: { baseUrl: config.provider.baseUrl, model: config.provider.model, reasoning: config.provider.reasoning, ...probe },
         build: fs.existsSync(DIST),
         sessions: sessions.size,
@@ -225,6 +317,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/settings' && method === 'GET') return json(res, 200, publicSettings());
+    if (p === '/api/vision/local' && method === 'GET') return json(res, 200, localVisionStatus());
     if (p === '/api/settings' && method === 'POST') {
       const body = await readBody(req);
       return json(res, 200, { ok: true, settings: publicSettings(), saved: saveSettings(body) });
@@ -290,13 +383,14 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       if (!body.image) return json(res, 400, { error: 'image 必填（dataURL）' });
       const referenceUrl = saveReferenceImage(body.image);
-      const analysis = await analyzeReference({
-        image: body.image,
-        palette: Array.isArray(body.palette) ? body.palette : [],
-        hint: String(body.message || ''),
-      });
-      return json(res, 200, { reference: { url: referenceUrl, analysis }, brief: referenceBrief(analysis, { hint: body.message, dimensions: body.dimensions }) });
-    }
+      const analysis = body.analysis
+        ? adoptLocalAnalysis(body.analysis, { palette: body.palette || [], model: body.analysis.model })
+        : await analyzeReference({
+          image: body.image,
+          palette: Array.isArray(body.palette) ? body.palette : [],
+          hint: String(body.message || ''),
+        });
+      return json(res, 200, { reference: { url: referenceUrl, analysis }, brief: referenceBrief(analysis, { hint: body.message, dimensions: body.dimensions }) });    }
 
     // ------------------------------------------------- parameterised prompts
     if (p === '/api/prompt/params' && method === 'GET') {

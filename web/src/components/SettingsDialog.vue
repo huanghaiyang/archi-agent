@@ -62,6 +62,24 @@
         </label>
       </div>
 
+      <div class="row local-block">
+        <label class="check">
+          <input v-model="form.localVision" type="checkbox" :disabled="!local.installed" />
+          <span>浏览器本地视觉（SmolVLM 500M · ONNX WASM）</span>
+        </label>
+        <div class="local-state" :class="{ ready: local.installed }">
+          <template v-if="local.installed">
+            已安装 · {{ local.bytes ? `${(local.bytes / 1073741824).toFixed(2)} GB` : '' }} · {{ local.dtype || 'q8' }} · {{ local.fileCount }} 个文件
+          </template>
+          <template v-else>
+            未下载 · 先在项目根目录运行 <code>npm run models:vision</code>
+          </template>
+        </div>
+        <p class="local-note">
+          开启后参考图先交给浏览器里的本地模型推理，不上传图片；失败或未安装时自动回退到上面的服务端视觉。
+        </p>
+      </div>
+
       <div class="tips">
         <code>vllm serve hy4 --tool-call-parser hy_v4 --port 8000</code>
         <code>ollama serve  # 然后 baseUrl 用 http://127.0.0.1:11434/v1</code>
@@ -81,12 +99,13 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue';
-import { getSettings, saveSettings, testProvider } from '../api.js';
+import { getLocalVisionStatus, getSettings, saveSettings, testProvider } from '../api.js';
 
 const emit = defineEmits(['close', 'saved']);
 const form = reactive({
-  type: 'auto', baseUrl: '', model: '', visionModel: '', apiKey: '', temperature: 0.9, reasoning: 'no_think', vision: true,
+  type: 'auto', baseUrl: '', model: '', visionModel: '', apiKey: '', temperature: 0.9, reasoning: 'no_think', vision: true, localVision: false,
 });
+const local = ref({ installed: false, bytes: 0, dtype: '', fileCount: 0, enabled: false });
 const testing = ref(false);
 const saving = ref(false);
 const result = ref(null);
@@ -115,9 +134,20 @@ async function load() {
       reasoning: s.provider?.reasoning || 'no_think',
       vision: s.provider?.vision !== false,
       visionModel: s.provider?.visionModel || '',
+      localVision: Boolean(s.provider?.localVision),
     });
   } catch {
     /* keep defaults */
+  }
+}
+
+async function loadLocalVision() {
+  try {
+    const s = await getLocalVisionStatus();
+    local.value = s;
+    if (!s.installed) form.localVision = false;
+  } catch {
+    /* server offline */
   }
 }
 
@@ -146,7 +176,10 @@ async function save() {
   }
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  loadLocalVision();
+});
 </script>
 
 <style scoped>
@@ -182,6 +215,18 @@ input:focus, select:focus { border-color: rgba(213, 163, 92, 0.5); }
 input:disabled { opacity: 0.45; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #9fb0c0; }
 .check input { width: 14px; height: 14px; accent-color: var(--accent); }
+
+.local-block {
+  padding: 10px 11px; border-radius: 9px; border: 1px solid #26313e;
+  background: #0f151d; gap: 7px;
+}
+.local-state { font-size: 10.5px; color: #b08a54; }
+.local-state.ready { color: #9fe0bd; }
+.local-state code {
+  font-family: ui-monospace, "SF Mono", monospace; font-size: 10px;
+  color: #cfd9e4; background: #171e28; border-radius: 4px; padding: 1px 4px;
+}
+.local-note { margin: 0; font-size: 10.5px; line-height: 1.55; color: #75828f; }
 
 .tips { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; }
 .tips code {
