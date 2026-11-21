@@ -48,7 +48,7 @@
       </section>
 
       <SceneView :spec="spec" class="viewer" @viewer="onViewer" />
-      <MetricsPanel :spec="spec" :viewer="viewer" class="metrics" />
+      <MetricsPanel :spec="spec" :viewer="viewer" class="inspector-col" />
     </main>
 
     <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" @saved="refreshHealth" />
@@ -196,10 +196,10 @@ async function reset() {
 }
 
 .viewer { min-width: 0; }
-.metrics { min-width: 0; }
+.inspector-col { min-width: 0; }
 
 @media (max-width: 1180px) {
   .layout { grid-template-columns: 360px 1fr; }
-  .metrics { display: none; }
+  .inspector-col { display: none; }
 }
 </style>
