@@ -108,6 +108,14 @@ export class MaterialLibrary {
       mat = new THREE.MeshStandardMaterial({ map: woodTex(), color: new THREE.Color('#c49a6c'), roughness: 0.75 });
     } else if (key === 'planter') {
       mat = new THREE.MeshStandardMaterial({ map: woodTex(), color: new THREE.Color('#7c6247'), roughness: 0.85 });
+    } else if (key === 'lamp') {
+      mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#f6e6c8'),
+        emissive: new THREE.Color('#ffcb8a'),
+        emissiveIntensity: 0.55,
+        roughness: 0.35,
+        metalness: 0.1,
+      });
     } else if (key === 'furnwood') {
       mat = new THREE.MeshStandardMaterial({ map: woodTex(), color: new THREE.Color('#c8a479'), roughness: 0.7 });
     } else if (key === 'furnfabric') {

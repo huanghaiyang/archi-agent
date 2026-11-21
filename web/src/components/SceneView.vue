@@ -51,6 +51,7 @@
             <button class="toggle" :class="{ on: opts.context }" @click="toggle('context')">周边</button>
             <button class="toggle wire" :class="{ on: opts.wireframe }" @click="toggle('wireframe')">线框</button>
             <button class="toggle" :class="{ on: opts.section }" @click="toggleSection">剖切</button>
+            <button class="toggle" :class="{ on: opts.peel }" @click="toggle('peel')">剥离</button>
           </div>
 
           <div class="group grow">
@@ -85,7 +86,7 @@ const emit = defineEmits(['viewer', 'pick']);
 
 const canvas = ref(null);
 const view = ref('iso');
-const opts = reactive({ roof: true, labels: false, explode: false, context: true, time: 'day', isolate: 0, wireframe: false, section: false });
+const opts = reactive({ roof: true, labels: false, explode: false, context: true, time: 'day', isolate: 0, wireframe: false, section: false, peel: false });
 let viewer = null;
 
 onMounted(() => {
@@ -98,6 +99,7 @@ onMounted(() => {
     opts.wireframe = Boolean(s.wireframe);
     opts.time = s.lighting?.time || opts.time;
     opts.section = Boolean(s.section?.enabled);
+    opts.peel = Boolean(s.peel);
   });
   emit('viewer', viewer);
   if (props.spec) applySpec(props.spec);
@@ -225,6 +227,7 @@ canvas { display: block; width: 100%; height: 100%; }
   font-size: 11.5px;
   color: #97a5b3;
 }
+.seg button { white-space: nowrap; }
 .seg button.on { background: rgba(213, 163, 92, 0.9); color: #1a1409; font-weight: 600; }
 .seg.small button { padding: 4px 9px; }
 
@@ -240,8 +243,8 @@ canvas { display: block; width: 100%; height: 100%; }
   backdrop-filter: blur(12px);
   color: #cfdae6;
 }
-.group { display: flex; align-items: center; gap: 8px; }
-.group.grow { flex: 1; min-width: 170px; }
+.group { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.group.grow { flex: 1 1 170px; min-width: 170px; }
 .glabel { font-size: 10.5px; letter-spacing: 0.1em; color: #7d8b99; white-space: nowrap; }
 .toggle {
   padding: 4px 10px;
@@ -249,6 +252,12 @@ canvas { display: block; width: 100%; height: 100%; }
   font-size: 11.5px;
   color: #8d9baa;
   border: 1px solid #2c3745;
+  white-space: nowrap;
+}
+@media (max-width: 1440px) {
+  .toolbar { gap: 8px; padding: 8px 10px; }
+  .toggle { padding: 4px 8px; }
+  .group { gap: 6px; }
 }
 .toggle.on { color: #f1e4cd; border-color: rgba(213, 163, 92, 0.55); background: rgba(213, 163, 92, 0.14); }
 .slider { flex: 1; accent-color: var(--accent); height: 3px; }
@@ -259,6 +268,7 @@ canvas { display: block; width: 100%; height: 100%; }
   border: 1px solid rgba(143, 166, 184, 0.35);
   font-size: 11.5px;
   color: #c3d0dc;
+  white-space: nowrap;
 }
 .export:hover { border-color: rgba(213, 163, 92, 0.6); color: var(--accent); }
 .hint { font-size: 10.5px; color: rgba(22, 30, 38, 0.55); }

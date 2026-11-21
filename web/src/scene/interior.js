@@ -5,7 +5,7 @@ import { sidesTouchingEnvelope } from '../../../shared/facade.js';
 
 const PART_T = 0.13;
 
-export function buildInterior({ batch, floor, spec, wx, wz }) {
+export function buildInterior({ batch, floor, spec, wx, wz, lamps = [] }) {
   const elev = floor.elevation;
 
   for (const room of floor.rooms) {
@@ -13,11 +13,21 @@ export function buildInterior({ batch, floor, spec, wx, wz }) {
     batch.box(`room:${room.type}`, room.w - 0.06, 0.05, room.d - 0.06, wx(room.x + room.w / 2), elev + 0.04, wz(room.z + room.d / 2));
     buildPartitions({ batch, room, floor, wx, wz, elev });
     buildFurniture({ batch, room, elev, wx, wz, spec });
+    buildLightFixture({ batch, room, floor, wx, wz, elev, lamps });
   }
 
   if (floor.corridor) {
     const c = floor.corridor;
     batch.box('room:circulation', c.w - 0.04, 0.055, c.d - 0.04, wx(c.x + c.w / 2), elev + 0.035, wz(c.z + c.d / 2));
+    const fixtures = Math.max(1, Math.floor(Math.max(c.w, c.d) / 7));
+    for (let i = 0; i < fixtures; i += 1) {
+      const t = (i + 0.5) / fixtures;
+      const x = c.w > c.d ? c.x + c.w * t : c.x + c.w / 2;
+      const z = c.w > c.d ? c.z + c.d / 2 : c.z + c.d * t;
+      batch.box('lamp', 0.5, 0.05, 0.5, wx(x), elev + floor.height - 0.16, wz(z));
+      batch.box('frame', 0.03, 0.55, 0.03, wx(x), elev + floor.height - 0.45, wz(z));
+      lamps.push({ x: wx(x), y: elev + floor.height - 0.16, z: wz(z) });
+    }
   }
   if (floor.core) buildCore({ batch, floor, wx, wz, elev });
 }
@@ -86,6 +96,20 @@ function buildCore({ batch, floor, wx, wz, elev }) {
   batch.box('frame', 0.05, 2.2, doorW, wx(liftX - 0.02), elev + 1.1, wz(liftZ + ld / 2));
   batch.box('furnmetal', 0.03, 2.14, 0.52, wx(liftX - 0.05), elev + 1.07, wz(liftZ + ld / 2 - 0.28));
   batch.box('furnmetal', 0.03, 2.14, 0.52, wx(liftX - 0.05), elev + 1.07, wz(liftZ + ld / 2 + 0.28));
+}
+
+// ------------------------------------------------------------------- lighting
+function buildLightFixture({ batch, room, floor, wx, wz, elev, lamps }) {
+  const h = Math.min(room.height, floor.height);
+  const x = wx(room.x + room.w / 2);
+  const z = wz(room.z + room.d / 2);
+  const n = room.w * room.d > 40 ? 2 : 1;
+  for (let i = 0; i < n; i += 1) {
+    const ox = n === 1 ? 0 : (i === 0 ? -room.w / 4 : room.w / 4);
+    batch.box('frame', 0.03, h * 0.18, 0.03, x + ox, elev + h - h * 0.09, z);
+    batch.box('lamp', 0.52, 0.06, 0.52, x + ox, elev + h - 0.2, z);
+    lamps.push({ x: x + ox, y: elev + h - 0.2, z });
+  }
 }
 
 // ------------------------------------------------------------------ furniture

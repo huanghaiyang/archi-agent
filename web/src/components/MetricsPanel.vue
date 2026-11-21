@@ -10,6 +10,7 @@
       <button :class="{ on: tab === 'nodes' }" @click="tab = 'nodes'">节点 <em>{{ stats.nodes || 0 }}</em></button>
       <button :class="{ on: tab === 'light' }" @click="tab = 'light'">光照</button>
       <button :class="{ on: tab === 'section' }" @click="tab = 'section'">剖切</button>
+      <button :class="{ on: tab === 'interior' }" @click="tab = 'interior'">内部</button>
     </div>
 
     <!-- ------------------------------------------------------------ metrics -->
@@ -197,6 +198,17 @@
             <div class="seg">
               <button v-for="a in axes" :key="a.key" :class="{ on: section.axis === a.key }" @click="setSection('axis', a.key)">{{ a.label }}</button>
             </div>
+            <label v-if="section.axis === 'angle'" class="slider-row wide-label">
+              <span>角度</span>
+              <input type="range" min="0" max="360" step="1" :value="section.angle" @input="setSection('angle', Number($event.target.value))" />
+              <b>{{ Math.round(section.angle) }}°</b>
+            </label>
+            <div class="seg small" style="margin-top: 8px">
+              <button :class="{ on: !section.flip }" @click="setSection('flip', false)">正向 +</button>
+              <button :class="{ on: section.flip }" @click="setSection('flip', true)">反向 −</button>
+            </div>
+            <p class="hint">正向保留法线一侧，反向保留另一侧；Y 向正向为下部，反向为上部。</p>
+            <button class="wide-btn draw-btn" :class="{ on: section.drawMode }" @click="toggleDraw">{{ section.drawMode ? '取消划线（再点两下）' : '划线定角（在场地点两下）' }}</button>
           </div>
 
           <div class="section">
@@ -212,10 +224,7 @@
             <div class="quick-row">
               <button v-for="q in quickCuts" :key="q" @click="setSection('offset', q)">{{ q }}%</button>
             </div>
-            <button class="toggle-line" :class="{ on: section.flip }" @click="setSection('flip', !section.flip)">
-              <span>保留侧</span>
-              <b>{{ cutSideLabel }}</b>
-            </button>
+            <div class="side-note">{{ cutSideLabel }}</div>
           </div>
 
           <div class="section">
@@ -229,6 +238,52 @@
 
           <div class="section">
             <button class="wide-btn" @click="resetSection">复位剖切（50% · 关闭）</button>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- ----------------------------------------------------------- interior -->
+    <template v-else-if="tab === 'interior'">
+      <div class="scroll">
+        <div v-if="!spec" class="blank"><p>生成方案后可在不剖切的情况下剥离外墙，查看内部家具、楼梯与灯具，并运行楼层联通性测试。</p></div>
+
+        <template v-else>
+          <div class="section first">
+            <div class="section-head"><h3>内部查看</h3></div>
+            <button class="toggle-line" :class="{ on: peel }" @click="toggleInterior('peel')">
+              <span>剥离外墙 / 屋面</span>
+              <b>{{ peel ? '已剥离' : '完整外壳' }}</b>
+            </button>
+            <button class="toggle-line" :class="{ on: glow }" @click="toggleInterior('glow')">
+              <span>内部灯具发光</span>
+              <b>{{ glow ? '开' : '关' }}</b>
+            </button>
+            <p class="hint">剥离后保留楼板、隔墙、家具与楼梯；灯具使用自发光材质，可与日/夜光照叠加。</p>
+          </div>
+
+          <div class="section">
+            <div class="section-head">
+              <h3>楼层联通性测试</h3>
+              <span class="count">{{ connectivity.points }} 个路径点</span>
+            </div>
+            <div class="progress" :class="{ live: connectivity.active }">
+              <i :style="{ width: `${connectivity.progress || 0}%` }"></i>
+            </div>
+            <div class="conn-meta">
+              <span>{{ connectivity.active ? '小球滚动中' : connectivity.progress >= 100 ? '已到达顶层' : '待运行' }}</span>
+              <b>{{ Math.round(connectivity.progress || 0) }}%</b>
+            </div>
+            <div class="quick-row">
+              <button class="primary" @click="runConnectivity">{{ connectivity.active ? '重新运行' : '运行小球' }}</button>
+              <button @click="resetConnectivity">清除</button>
+            </div>
+            <p class="hint">小球从入口进入，沿首层走廊到达楼梯，逐层滚到最顶层；橙色管道为完整路径，可穿透墙体显示。</p>
+          </div>
+
+          <div class="section">
+            <div class="section-head"><h3>提示</h3></div>
+            <p class="hint">配合「剖切」页签的 Y 向剖切，可从上方观察小球的楼层路径；开启「剥离外墙」效果更直观。</p>
           </div>
         </template>
       </div>
@@ -333,17 +388,22 @@ const light = reactive({
   shadows: 'soft', interior: false,
 });
 const section = reactive({
-  enabled: false, axis: 'z', offset: 50, flip: false, cap: true,
-  position: 0, range: { x: [0, 1], y: [0, 1], z: [0, 1] },
+  enabled: false, axis: 'z', offset: 50, flip: false, cap: true, angle: 0, drawMode: false,
+  position: 0,
 });
 const axes = [
   { key: 'x', label: '横剖 X' },
   { key: 'y', label: '水平 Y' },
   { key: 'z', label: '纵剖 Z' },
+  { key: 'angle', label: '斜剖' },
 ];
 const quickCuts = [25, 50, 75];
+const peel = ref(false);
+const glow = ref(false);
+const connectivity = reactive({ active: false, progress: 0, points: 0, duration: 0, hasPath: false });
 const cutSideLabel = computed(() => {
-  if (section.axis === 'y') return section.flip ? '保留上部' : '保留下部';
+  if (section.axis === 'y') return section.flip ? '保留上部楼层' : '保留下部楼层';
+  if (section.axis === 'angle') return `保留 ${section.flip ? '反向' : '正向'} · ${Math.round(section.angle)}°`;
   return `保留 ${section.flip ? '-' : '+'}${String(section.axis).toUpperCase()} 侧`;
 });
 
@@ -352,7 +412,7 @@ const ROOF_LABEL = { flat: '平屋顶', gable: '双坡屋顶', shed: '单坡屋�
 const facadeLabel = computed(() => (props.spec ? FACADE_LABEL[props.spec.facade.system] || props.spec.facade.system : ''));
 const roofLabel = computed(() => (props.spec ? ROOF_LABEL[props.spec.massing.roof.type] || props.spec.massing.roof.type : ''));
 
-const title = computed(() => ({ metrics: '方案指标', nodes: '模型节点', light: '光照与环境', section: '剖切展示' }[tab.value]));
+const title = computed(() => ({ metrics: '方案指标', nodes: '模型节点', light: '光照与环境', section: '剖切展示', interior: '内部与联通' }[tab.value]));
 const verdict = computed(() => props.spec?.checkSummary?.verdict || '');
 const verdictClass = computed(() => {
   const s = props.spec?.checkSummary;
@@ -399,6 +459,9 @@ function sync() {
   state.value = s;
   Object.assign(light, s.lighting);
   if (s.section) Object.assign(section, s.section);
+  peel.value = Boolean(s.peel);
+  glow.value = Boolean(s.glow);
+  if (s.connectivity) Object.assign(connectivity, s.connectivity);
   if (selected.value) selected.value = props.viewer.getNodeInfo(selected.value.id);
 }
 
@@ -410,9 +473,13 @@ watch(
       state.value = s;
       Object.assign(light, s.lighting);
       if (s.section) Object.assign(section, s.section);
+      peel.value = Boolean(s.peel);
+      glow.value = Boolean(s.glow);
+      if (s.connectivity) Object.assign(connectivity, s.connectivity);
     };
     v.onPick = (id) => select(id);
     v.onLighting = (l) => Object.assign(light, l);
+    v.onConnectivity = (c) => Object.assign(connectivity, c);
     sync();
   },
   { immediate: true },
@@ -520,7 +587,30 @@ function setSection(key, value) {
 }
 
 function resetSection() {
-  props.viewer?.setSection({ enabled: false, axis: 'z', offset: 50, flip: false, cap: true });
+  props.viewer?.setSection({ enabled: false, axis: 'z', offset: 50, flip: false, cap: true, angle: 0, drawMode: false });
+  sync();
+}
+
+function toggleDraw() {
+  if (!props.viewer) return;
+  if (section.drawMode) props.viewer.cancelSectionDraw();
+  else props.viewer.beginSectionDraw();
+  sync();
+}
+
+function toggleInterior(key) {
+  if (!props.viewer) return;
+  props.viewer.setOption(key, !props.viewer.options[key]);
+  sync();
+}
+
+function runConnectivity() {
+  props.viewer?.runConnectivity();
+  sync();
+}
+
+function resetConnectivity() {
+  props.viewer?.resetConnectivity();
   sync();
 }
 </script>
@@ -553,13 +643,13 @@ function resetSection() {
 .tag.bad { border-color: rgba(226, 121, 97, 0.4); color: #e8a596; background: rgba(226, 121, 97, 0.08); }
 
 .tabs {
-  display: flex; gap: 3px; padding: 0 9px 7px; flex: 0 0 auto;
+  display: flex; gap: 2px; padding: 0 6px 7px; flex: 0 0 auto;
   border-bottom: 1px solid var(--line);
 }
 .tabs button {
   flex: 1 1 0; min-width: 0; height: 30px; border-radius: 7px;
-  display: flex; align-items: center; justify-content: center; gap: 4px;
-  font-size: 11px; color: #8493a2; background: #171e28; border: 1px solid transparent;
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  font-size: 10.5px; color: #8493a2; background: #171e28; border: 1px solid transparent;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .tabs button:hover { color: #cdd9e5; background: #1b232e; }
@@ -568,8 +658,8 @@ function resetSection() {
   border-color: rgba(213, 163, 92, 0.32);
 }
 .tabs em {
-  font-style: normal; font-size: 9.5px; line-height: 14px; padding: 0 5px; border-radius: 999px;
-  color: #8b98a6; background: #222b37; min-width: 18px; text-align: center;
+  font-style: normal; font-size: 9px; line-height: 13px; padding: 0 4px; border-radius: 999px;
+  color: #8b98a6; background: #222b37; min-width: 16px; text-align: center;
 }
 .tabs button.on em { color: #f1e4cd; background: rgba(213, 163, 92, 0.22); }
 
@@ -768,6 +858,22 @@ table.floors tr:last-child td { border-bottom: 0; }
 }
 .toggle-line b { font-weight: 500; font-size: 10.5px; }
 .hint { margin: 9px 0 0; font-size: 10px; line-height: 1.6; color: #6f7d8b; }
+.side-note {
+  margin-top: 8px; font-size: 10px; color: #b7c3cf; text-align: center;
+  border: 1px dashed #2c3745; border-radius: 6px; line-height: 24px; background: #151c25;
+}
+.draw-btn { margin-top: 9px; }
+.draw-btn.on { border-color: rgba(111, 211, 255, 0.5); color: #bfe9ff; background: rgba(111, 211, 255, 0.08); }
+.progress {
+  height: 7px; border-radius: 999px; background: #131922; border: 1px solid #232d3a; overflow: hidden;
+}
+.progress i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #d5a35c, #ffd49a); transition: width 0.12s linear; }
+.progress.live i { box-shadow: 0 0 10px rgba(255, 196, 112, 0.55); }
+.conn-meta { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; color: #7d8b99; }
+.conn-meta b { color: #d8c3a2; font-weight: 500; font-variant-numeric: tabular-nums; }
+.quick-row .primary {
+  color: #f2e4cd; border-color: rgba(213, 163, 92, 0.42); background: rgba(213, 163, 92, 0.12);
+}
 .quick-row { display: flex; gap: 5px; margin-top: 9px; }
 .quick-row button {
   flex: 1 1 0; font-size: 10px; line-height: 24px; border-radius: 6px;

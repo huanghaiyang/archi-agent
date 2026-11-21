@@ -32,6 +32,7 @@ const MAT_LABEL = {
   furnwood: '木家具',
   furnmetal: '金属家具',
   furnfabric: '软装',
+  lamp: '灯具 / 发光构件',
   'room:circulation': '地面铺装',
   'room:public': '地面铺装',
   'room:office': '地面铺装',
@@ -49,6 +50,9 @@ const MAT_LABEL = {
   paving: '铺装',
   carbody: '车辆',
 };
+
+// Exterior shell buckets removed by the "peel facade" mode
+const SHELL_KEYS = new Set(['wall', 'glass', 'frame', 'coping', 'roof', 'void']);
 
 export class ArchiViewer {
   constructor(canvas) {
@@ -115,7 +119,14 @@ export class ArchiViewer {
     this._sectionDrag = null;
     this._lastSectionNotify = 0;
     this._onSectionDown = (e) => {
-      if (!this.section.enabled || e.button !== 0) return;
+      if (e.button !== 0) return;
+      if (this.section.drawMode) {
+        this.sectionDrawClick(e);
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
+      if (!this.section.enabled) return;
       if (!this.sectionHit(e)) return;
       this._sectionDrag = { pointerId: e.pointerId };
       this.controls.enabled = false;
@@ -125,6 +136,10 @@ export class ArchiViewer {
     };
     this._onSectionMove = (e) => {
       if (!this._sectionDrag) {
+        if (this.section.drawMode) {
+          canvas.style.cursor = 'crosshair';
+          return;
+        }
         if (!this.section.enabled) {
           if (canvas.style.cursor === 'grab') canvas.style.cursor = '';
           return;
@@ -146,7 +161,7 @@ export class ArchiViewer {
       if (e.pointerId != null && e.pointerId !== this._sectionDrag.pointerId) return;
       this._sectionDrag = null;
       this.controls.enabled = true;
-      canvas.style.cursor = '';
+      canvas.style.cursor = this.section.drawMode ? 'crosshair' : '';
       this.notify();
     };
     canvas.addEventListener('pointerdown', this._onSectionDown, true);
@@ -154,17 +169,27 @@ export class ArchiViewer {
     window.addEventListener('pointerup', this._onSectionUp);
     window.addEventListener('pointercancel', this._onSectionUp);
 
-    this.options = { roof: true, labels: false, isolate: 0, explode: false, time: 'day', context: true, wireframe: false };
-    this.section = { enabled: false, axis: 'z', offset: 50, flip: false, cap: true };
+    this.options = { roof: true, labels: false, isolate: 0, explode: false, time: 'day', context: true, wireframe: false, peel: false, glow: false };
+    this.section = { enabled: false, axis: 'z', offset: 50, flip: false, cap: true, angle: 0, drawMode: false };
     this.sectionRange = { x: [0, 1], y: [0, 1], z: [0, 1] };
     this.sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
     this.sectionHelper = null;
+    this.sectionDraw = null;
+    this.sectionDrawLine = null;
+    this.shellMeshes = [];
     this.changeListeners = new Set();
+    this.connectivity = { active: false, t: 0, progress: 0, duration: 0, hasPath: false, points: 0 };
+    this.connectivityGroup = null;
+    this.connectivityBall = null;
+    this.connectivityCurve = null;
+    this.onConnectivity = null;
+    this._lastConnNotify = 0;
     this.spec = null;
     this.mats = null;
     this.floorGroups = [];
     this.roofGroup = null;
     this.labelsGroup = null;
+    this.glowGroup = null;
     this.contextGroup = null;
     this.siteGroup = null;
     this.explode = 0;
@@ -228,6 +253,7 @@ export class ArchiViewer {
       });
     }
     this.selectionHelper?.update();
+    this.animateConnectivity(dt);
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -237,6 +263,9 @@ export class ArchiViewer {
     if (!spec || !spec.floors?.length) return;
     this.spec = spec;
     this.disposeBuilding();
+    this.disposeConnectivity();
+    this.shellMeshes = [];
+    this.lampPositions = [];
     this.mats = new MaterialLibrary(spec);
 
     // fresh semantic tree per scheme
@@ -287,7 +316,7 @@ export class ArchiViewer {
         batch.box('plinth', fp.w + 0.9, 0.32, fp.d + 0.9, wx(fp.x + fp.w / 2), floor.elevation - 0.16, wz(fp.z + fp.d / 2));
       }
 
-      buildInterior({ batch, floor, spec, wx, wz });
+      buildInterior({ batch, floor, spec, wx, wz, lamps: this.lampPositions });
       buildFacade({ batch, floor, spec, wx, wz });
 
       // horizontal floor band: a thin, slightly proud slab edge that gives
@@ -332,6 +361,7 @@ export class ArchiViewer {
       this.registerNode(labelsNode, s, `房间名 · ${s.userData.name}`, { id: `label-${i}`, type: 'sprite' });
     });
     building.add(this.labelsGroup);
+    this.buildLampGlow(building);
 
     this.root.add(building);
     this.building = building;
@@ -357,6 +387,7 @@ export class ArchiViewer {
     this.applyTimeOfDay(this.options.time);
     this.selected = null;
     this.updateSectionRange();
+    this.buildConnectivity();
     this.applyOptions();
     this.frame();
     this.notify();
@@ -388,6 +419,7 @@ export class ArchiViewer {
       mesh.receiveShadow = !glass;
       mesh.userData.key = key;
       if (glass) mesh.renderOrder = 1;
+      if (SHELL_KEYS.has(key)) this.shellMeshes.push(mesh);
       group.add(mesh);
       if (parentNode) {
         this.registerNode(parentNode, mesh, MAT_LABEL[key] || key, { type: 'mesh', key });
@@ -541,9 +573,9 @@ export class ArchiViewer {
   }
 
   applyOptions() {
-    const { roof, labels, isolate, context } = this.options;
+    const { roof, labels, isolate, context, peel } = this.options;
     const roofIsolate = this.roofGroup?.userData?.isolateLevel ?? 99;
-    if (this.roofGroup) this.roofGroup.visible = roof && (!isolate || isolate >= roofIsolate);
+    if (this.roofGroup) this.roofGroup.visible = roof && !peel && (!isolate || isolate >= roofIsolate);
     if (this.contextGroup) this.contextGroup.visible = context;
     this.floorGroups.forEach((g) => { g.visible = !isolate || g.userData.level === isolate; });
     if (this.labelsGroup) {
@@ -554,8 +586,60 @@ export class ArchiViewer {
       });
     }
     this.applyWireframe();
+    this.applyShellPeel();
+    this.applyGlow();
     this.applySection();
     this.applyHidden();
+  }
+
+  applyShellPeel() {
+    const peel = Boolean(this.options.peel);
+    for (const mesh of this.shellMeshes) {
+      if (peel) mesh.visible = false;
+      else if (!this.hidden.has(mesh.userData.nodeId)) mesh.visible = true;
+    }
+  }
+
+  applyGlow() {
+    const lamp = this.mats?.cache.get('lamp');
+    if (lamp) {
+      lamp.emissiveIntensity = this.options.glow ? 3.6 : 0.55;
+      lamp.needsUpdate = true;
+    }
+    if (this.glowGroup) this.glowGroup.visible = Boolean(this.options.glow);
+  }
+
+  /** Additive halo sprites at every lamp so the glow option reads clearly. */
+  buildLampGlow(parent) {
+    const positions = this.lampPositions || [];
+    if (!positions.length) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(32, 32, 1, 32, 32, 31);
+    grad.addColorStop(0, 'rgba(255,236,205,0.95)');
+    grad.addColorStop(0.32, 'rgba(255,201,138,0.5)');
+    grad.addColorStop(1, 'rgba(255,180,94,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({
+      map: tex, color: 0xffd9a8, transparent: true, opacity: 0.52,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const group = new THREE.Group();
+    for (const p of positions) {
+      const sprite = new THREE.Sprite(mat);
+      sprite.position.set(p.x, p.y - 0.16, p.z);
+      sprite.scale.set(2.1, 2.1, 1);
+      group.add(sprite);
+    }
+    group.visible = Boolean(this.options.glow);
+    group.renderOrder = 8;
+    parent.add(group);
+    this.glowGroup = group;
   }
 
   applyWireframe() {
@@ -587,11 +671,63 @@ export class ArchiViewer {
     this.sectionSize = box.getSize(new THREE.Vector3());
   }
 
-  /** World-space position of the cut for the active axis (0–100 %). */
-  sectionPosition() {
-    const [min, max] = this.sectionRange[this.section.axis] || [0, 1];
+  sectionAngleRad() {
+    if (this.section.axis === 'x') return Math.PI / 2;
+    if (this.section.axis === 'z') return 0;
+    return THREE.MathUtils.degToRad(this.section.angle || 0);
+  }
+
+  /** Canonical outward normal, before the keep-side flip. */
+  sectionBaseNormal() {
+    const S = this.section;
+    if (S.axis === 'y') return new THREE.Vector3(0, -1, 0); // keep lower floors by default
+    if (S.axis === 'x') return new THREE.Vector3(1, 0, 0);
+    if (S.axis === 'z') return new THREE.Vector3(0, 0, 1);
+    const a = this.sectionAngleRad();
+    return new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+  }
+
+  /** Outward normal of the cutting plane in world space. */
+  sectionNormal() {
+    const n = this.sectionBaseNormal();
+    if (this.section.flip) n.negate();
+    return n;
+  }
+
+  /** Project the building bounding box on the plane normal. */
+  projectionRange(normal = this.sectionNormal()) {
+    const size = this.sectionSize || new THREE.Vector3(30, 14, 30);
+    const center = this.sectionCenter || new THREE.Vector3();
+    let min = Infinity;
+    let max = -Infinity;
+    for (const sx of [-0.5, 0.5]) {
+      for (const sy of [-0.5, 0.5]) {
+        for (const sz of [-0.5, 0.5]) {
+          const p = new THREE.Vector3(
+            center.x + size.x * sx,
+            center.y + size.y * sy,
+            center.z + size.z * sz,
+          );
+          const d = normal.dot(p);
+          if (d < min) min = d;
+          if (d > max) max = d;
+        }
+      }
+    }
+    return [min, max];
+  }
+
+  /** Signed distance of the cut from the origin along its canonical normal. */
+  sectionPosition(normal = this.sectionBaseNormal()) {
+    const [min, max] = this.projectionRange(normal);
     const t = THREE.MathUtils.clamp(this.section.offset, 0, 100) / 100;
     return min + (max - min) * t;
+  }
+
+  /** A point on the plane, projected toward the building centre. */
+  sectionPlanePoint(pos = this.sectionPosition(), normal = this.sectionBaseNormal()) {
+    const center = this.sectionCenter || new THREE.Vector3();
+    return center.clone().sub(normal.clone().multiplyScalar(normal.dot(center))).add(normal.clone().multiplyScalar(pos));
   }
 
   sectionHit(event) {
@@ -610,33 +746,32 @@ export class ArchiViewer {
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
 
-    const axis = this.section.axis;
-    const pos = this.sectionPosition();
-    const point = (this.sectionCenter || new THREE.Vector3()).clone();
-    point[axis] = pos;
+    const normal = this.sectionBaseNormal();
+    const point = this.sectionPlanePoint();
     const camDir = new THREE.Vector3();
     this.camera.getWorldDirection(camDir);
     const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, point);
     const hit = new THREE.Vector3();
     if (!this.raycaster.ray.intersectPlane(dragPlane, hit)) return;
 
-    const [min, max] = this.sectionRange[axis] || [0, 1];
-    const offset = THREE.MathUtils.clamp(((hit[axis] - min) / (max - min)) * 100, 0, 100);
-    this.section.offset = offset;
+    const [min, max] = this.projectionRange(normal);
+    const pos = normal.dot(hit);
+    this.section.offset = THREE.MathUtils.clamp(((pos - min) / (max - min)) * 100, 0, 100);
     this.updateSectionPlane();
   }
 
   /** Cheap update used while dragging: no geometry rebuild. */
   updateSectionPlane() {
     if (!this.section.enabled) return;
-    const axis = this.section.axis;
-    const pos = this.sectionPosition();
-    this.sectionPlane.constant = -this.sectionPlane.normal.dot(new THREE.Vector3(
-      axis === 'x' ? pos : 0,
-      axis === 'y' ? pos : 0,
-      axis === 'z' ? pos : 0,
-    ));
-    if (this.sectionHelper) this.sectionHelper.position[axis] = pos;
+    const base = this.sectionBaseNormal();
+    const pos = this.sectionPosition(base);
+    const n = this.sectionNormal();
+    if (this.sectionHelper) {
+      const p = this.sectionPlanePoint(pos, base);
+      this.sectionHelper.position.copy(p);
+    }
+    // same physical plane; flip only changes which half is kept
+    this.sectionPlane.set(n, -n.dot(this.sectionPlanePoint(pos, base)));
   }
 
   applySection() {
@@ -654,19 +789,10 @@ export class ArchiViewer {
       return;
     }
 
-    const pos = this.sectionPosition();
-    const normal = new THREE.Vector3(
-      S.axis === 'x' ? 1 : 0,
-      S.axis === 'y' ? -1 : 0, // horizontal cut keeps the lower floors by default
-      S.axis === 'z' ? 1 : 0,
-    );
-    if (S.flip) normal.negate();
-    // Plane equation normal·p + constant = 0; Three keeps the positive side.
-    this.sectionPlane.set(normal, -normal.dot(new THREE.Vector3(
-      S.axis === 'x' ? pos : 0,
-      S.axis === 'y' ? pos : 0,
-      S.axis === 'z' ? pos : 0,
-    )));
+    const base = this.sectionBaseNormal();
+    const pos = this.sectionPosition(base);
+    const n = this.sectionNormal();
+    this.sectionPlane.set(n, -n.dot(this.sectionPlanePoint(pos, base)));
 
     for (const mat of mats) {
       if (!('clippingPlanes' in mat)) continue;
@@ -684,11 +810,14 @@ export class ArchiViewer {
     const S = this.section;
     const axis = S.axis;
 
-    let w = size.x;
-    let h = size.y;
-    if (axis === 'x') { w = size.z + 1.2; h = size.y + 1.2; }
-    else if (axis === 'y') { w = size.x + 1.2; h = size.z + 1.2; }
-    else { w = size.x + 1.2; h = size.y + 1.2; }
+    let w;
+    let h;
+    if (axis === 'y') { w = size.x + 1.2; h = size.z + 1.2; }
+    else {
+      const a = this.sectionAngleRad();
+      w = Math.abs(size.x * Math.sin(a)) + Math.abs(size.z * Math.cos(a)) + 1.2;
+      h = size.y + 1.2;
+    }
 
     if (this.sectionHelper) {
       this.scene.remove(this.sectionHelper);
@@ -699,32 +828,48 @@ export class ArchiViewer {
     }
 
     const g = new THREE.Group();
-    if (axis === 'x') {
-      g.rotation.y = Math.PI / 2;
-      g.position.set(pos, center.y, center.z);
-    } else if (axis === 'y') {
+    const base = this.sectionBaseNormal();
+    const p = this.sectionPlanePoint(pos, base);
+    if (axis === 'y') {
       g.rotation.x = -Math.PI / 2;
-      g.position.set(center.x, pos, center.z);
+      g.position.copy(p);
     } else {
-      g.position.set(center.x, center.y, pos);
+      const a = this.sectionAngleRad();
+      g.rotation.y = a;
+      g.position.copy(p);
     }
 
     const plane = new THREE.PlaneGeometry(w, h);
     const fill = new THREE.Mesh(plane, new THREE.MeshBasicMaterial({
       color: 0xd5a35c,
       transparent: true,
-      opacity: S.cap ? 0.075 : 0.02,
+      opacity: S.cap ? 0.02 : 0.008,
       side: THREE.DoubleSide,
       depthWrite: false,
     }));
     fill.renderOrder = 4;
     g.add(fill);
 
+    // light drafting grid so the cut surface reads as a plane instead of a slab
+    const gridPts = [];
+    const step = 2.4;
+    for (let x = -w / 2 + step; x < w / 2; x += step) gridPts.push(x, -h / 2, 0.02, x, h / 2, 0.02);
+    for (let y = -h / 2 + step; y < h / 2; y += step) gridPts.push(-w / 2, y, 0.02, w / 2, y, 0.02);
+    if (gridPts.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(gridPts, 3));
+      const grid = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+        color: 0xe1b877, transparent: true, opacity: 0.11, depthWrite: false,
+      }));
+      grid.renderOrder = 5;
+      g.add(grid);
+    }
+
     const edge = new THREE.LineSegments(
       new THREE.EdgesGeometry(plane),
-      new THREE.LineBasicMaterial({ color: 0xe1b877, transparent: true, opacity: 0.9, depthTest: false }),
+      new THREE.LineBasicMaterial({ color: 0xe1b877, transparent: true, opacity: 0.5, depthTest: false }),
     );
-    edge.renderOrder = 5;
+    edge.renderOrder = 6;
     g.add(edge);
 
     this.sectionHelper = g;
@@ -732,15 +877,249 @@ export class ArchiViewer {
     this.scene.add(g);
   }
 
+  beginSectionDraw() {
+    this.section.drawMode = true;
+    this.sectionDraw = null;
+    this.clearSectionDrawLine();
+    this.notify();
+    return this.getSection();
+  }
+
+  cancelSectionDraw() {
+    this.section.drawMode = false;
+    this.sectionDraw = null;
+    this.clearSectionDrawLine();
+    this.notify();
+  }
+
+  clearSectionDrawLine() {
+    if (!this.sectionDrawLine) return;
+    this.scene.remove(this.sectionDrawLine);
+    this.sectionDrawLine.geometry?.dispose();
+    this.sectionDrawLine.material?.dispose();
+    this.sectionDrawLine = null;
+  }
+
+  /** Raycast a click onto the building first, then onto the ground. */
+  planPoint(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    if (this.building) {
+      const hits = this.raycaster.intersectObject(this.building, true);
+      const hit = hits.find((h) => h.object.visible && h.object.isMesh);
+      if (hit) return hit.point.clone();
+    }
+    const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.05);
+    const onGround = new THREE.Vector3();
+    return this.raycaster.ray.intersectPlane(ground, onGround) ? onGround : null;
+  }
+
+  sectionDrawClick(event) {
+    const hit = this.planPoint(event);
+    if (!hit) return;
+    if (!this.sectionDraw) {
+      this.sectionDraw = [hit];
+      this.clearSectionDrawLine();
+      const geo = new THREE.BufferGeometry().setFromPoints([hit, hit]);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: 0x6fd3ff, transparent: true, opacity: 0.95, depthTest: false,
+      }));
+      line.renderOrder = 9;
+      this.sectionDrawLine = line;
+      this.scene.add(line);
+      return;
+    }
+
+    const p1 = this.sectionDraw[0];
+    const p2 = hit;
+    const dx = p2.x - p1.x;
+    const dz = p2.z - p1.z;
+    if (Math.hypot(dx, dz) < 0.6) return; // too short, keep waiting
+
+    // Section plane runs vertically through the drawn line; its normal is
+    // perpendicular to the line in plan. Orient it away from the camera so the
+    // near half is removed and the building behind the line stays visible.
+    const n = new THREE.Vector3(dz, 0, -dx).normalize();
+    const camDir = new THREE.Vector3();
+    this.camera.getWorldDirection(camDir);
+    if (n.x * camDir.x + n.z * camDir.z < 0) n.negate();
+    const angle = ((Math.atan2(n.x, n.z) * 180 / Math.PI) + 360) % 360;
+    const mid = p1.clone().add(p2).multiplyScalar(0.5);
+    const [min, max] = this.projectionRange(n);
+    this.section.axis = 'angle';
+    this.section.angle = +angle.toFixed(1);
+    this.section.flip = false;
+    this.section.offset = THREE.MathUtils.clamp(((n.dot(mid) - min) / (max - min)) * 100, 0, 100);
+    this.section.drawMode = false;
+    this.section.enabled = true;
+    this.sectionDraw = null;
+    this.clearSectionDrawLine();
+    this.applyOptions();
+    this.notify();
+  }
+
   setSection(patch = {}) {
     Object.assign(this.section, patch);
+    if (patch.axis) {
+      this.section.drawMode = false;
+      this.sectionDraw = null;
+      this.clearSectionDrawLine();
+    }
     this.applyOptions();
     this.notify();
     return this.getSection();
   }
 
   getSection() {
-    return { ...this.section, position: +this.sectionPosition().toFixed(2), range: this.sectionRange };
+    const base = this.sectionBaseNormal();
+    const pos = this.sectionPosition(base);
+    const p = this.sectionPlanePoint(pos, base);
+    const shown = this.section.axis === 'y' ? p.y : pos;
+    return { ...this.section, position: +shown.toFixed(2) };
+  }
+
+  // ----------------------------------------------------------- connectivity
+  /** Build the entrance → stair → top-floor route and its visual props. */
+  buildConnectivity() {
+    this.disposeConnectivity();
+    const spec = this.spec;
+    if (!spec?.floors?.length) return false;
+    const siteW = spec.site.width;
+    const siteD = spec.site.depth;
+    const wx = (x) => x - siteW / 2;
+    const wz = (z) => z - siteD / 2;
+
+    const f0 = spec.floors[0];
+    const fp = f0.footprint;
+    const points = [];
+    const entryX = wx(fp.x + fp.w / 2);
+    const entryZ = wz(fp.z + fp.d);
+    points.push(new THREE.Vector3(entryX, 0.3, entryZ + 2.2));
+    points.push(new THREE.Vector3(entryX, 0.3, entryZ - 1.4));
+
+    for (const floor of spec.floors) {
+      const core = floor.core;
+      if (!core) continue;
+      const run = Math.min(0.3, (core.d * 0.62) / 14);
+      const rise = floor.height / 14;
+      const stairW = Math.min(1.5, core.w * 0.48);
+      const x = wx(core.x + 0.2 + stairW / 2);
+      const z0 = wz(core.z + 0.2);
+      // corridor → stair foot
+      points.push(new THREE.Vector3(x, floor.elevation + 0.32, z0 - 1.2));
+      for (let i = 0; i < 14; i += 1) {
+        points.push(new THREE.Vector3(x, floor.elevation + rise * (i + 1) + 0.32, z0 + run * (i + 1)));
+      }
+      // top landing
+      points.push(new THREE.Vector3(x, floor.elevation + floor.height + 0.32, z0 + core.d * 0.62));
+    }
+
+    const top = spec.floors[spec.floors.length - 1];
+    const tfp = top.footprint;
+    points.push(new THREE.Vector3(wx(tfp.x + tfp.w / 2), top.elevation + top.height + 0.32, wz(tfp.z + tfp.d / 2)));
+
+    const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.18);
+    const length = curve.getLength();
+    const group = new THREE.Group();
+    const tube = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, Math.max(64, Math.round(length * 4)), 0.09, 6, false),
+      new THREE.MeshBasicMaterial({ color: 0xffb45e, transparent: true, opacity: 0.82, depthTest: false, depthWrite: false }),
+    );
+    tube.renderOrder = 7;
+    group.add(tube);
+
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 20, 14),
+      new THREE.MeshStandardMaterial({
+        color: '#ffd9a1', emissive: new THREE.Color('#ff9c3d'), emissiveIntensity: 2.1,
+        roughness: 0.35, metalness: 0.15, depthTest: false,
+      }),
+    );
+    ball.renderOrder = 9;
+    group.add(ball);
+
+    group.visible = false;
+    this.scene.add(group);
+    this.connectivityGroup = group;
+    this.connectivityBall = ball;
+    this.connectivityCurve = curve;
+    this.connectivity.duration = Math.max(5, length / 3.6);
+    this.connectivity.points = points.length;
+    this.connectivity.hasPath = true;
+    this.connectivity.t = 0;
+    ball.position.copy(curve.getPointAt(0));
+    return true;
+  }
+
+  runConnectivity() {
+    if (!this.connectivityCurve && !this.buildConnectivity()) return null;
+    this.connectivityGroup.visible = true;
+    this.connectivityBall.visible = true;
+    this.connectivity.t = 0;
+    this.connectivity.active = true;
+    this.connectivityBall.position.copy(this.connectivityCurve.getPointAt(0));
+    this.notifyConnectivity();
+    this.notify();
+    return { ...this.connectivity };
+  }
+
+  resetConnectivity() {
+    if (!this.connectivityCurve) this.buildConnectivity();
+    this.connectivity.active = false;
+    this.connectivity.t = 0;
+    this.connectivity.progress = 0;
+    if (this.connectivityGroup) this.connectivityGroup.visible = false;
+    if (this.connectivityBall && this.connectivityCurve) {
+      this.connectivityBall.position.copy(this.connectivityCurve.getPointAt(0));
+    }
+    this.notifyConnectivity();
+    this.notify();
+    return { ...this.connectivity };
+  }
+
+  animateConnectivity(dt) {
+    if (!this.connectivity.active || !this.connectivityCurve) return;
+    this.connectivity.t = Math.min(1, this.connectivity.t + dt / Math.max(1, this.connectivity.duration));
+    const p = this.connectivityCurve.getPointAt(this.connectivity.t);
+    this.connectivityBall.position.copy(p);
+    this.connectivityBall.rotation.x -= dt * 3.2;
+    if (this.connectivity.t >= 1) {
+      this.connectivity.active = false;
+      this.notifyConnectivity();
+      this.notify();
+      return;
+    }
+    const now = Date.now();
+    if (now - this._lastConnNotify > 100) {
+      this._lastConnNotify = now;
+      this.notifyConnectivity();
+    }
+  }
+
+  notifyConnectivity() {
+    const c = { ...this.connectivity, progress: Math.round(this.connectivity.t * 100) };
+    if (typeof this.onConnectivity === 'function') this.onConnectivity(c);
+  }
+
+  disposeConnectivity() {
+    if (this.connectivityGroup) {
+      this.scene.remove(this.connectivityGroup);
+      this.connectivityGroup.traverse?.((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
+    }
+    this.connectivityGroup = null;
+    this.connectivityBall = null;
+    this.connectivityCurve = null;
+    this.connectivity.active = false;
+    this.connectivity.t = 0;
+    this.connectivity.progress = 0;
+    this.connectivity.hasPath = false;
+    this.connectivity.points = 0;
+    this.connectivity.duration = 0;
   }
 
   applyHidden() {
@@ -941,7 +1320,10 @@ export class ArchiViewer {
       canUndo: this.hIndex >= 0,
       canRedo: this.hIndex < this.history.length - 1,
       wireframe: Boolean(this.options.wireframe),
+      peel: Boolean(this.options.peel),
+      glow: Boolean(this.options.glow),
       section: this.getSection(),
+      connectivity: { ...this.connectivity, progress: Math.round(this.connectivity.t * 100) },
       lighting: this.getLighting(),
       stats: this.getStats(),
     };
@@ -1066,6 +1448,9 @@ export class ArchiViewer {
     this.clearSelection();
     this.disposeInteriorLights();
     this.disposeSectionHelper();
+    this.clearSectionDrawLine();
+    this.section.drawMode = false;
+    this.sectionDraw = null;
     this.section.enabled = false;
     this.root.children.slice().forEach((child) => {
       child.traverse?.((o) => {
@@ -1084,6 +1469,7 @@ export class ArchiViewer {
     this.floorGroups = [];
     this.roofGroup = null;
     this.labelsGroup = null;
+    this.glowGroup = null;
     this.contextGroup = null;
     this.siteGroup = null;
     this.tree = { id: 'root', label: '场景', type: 'group', children: [] };
@@ -1102,6 +1488,7 @@ export class ArchiViewer {
     window.removeEventListener('pointerup', this._onSectionUp);
     window.removeEventListener('pointercancel', this._onSectionUp);
     this.changeListeners.clear();
+    this.disposeConnectivity();
     this.observer?.disconnect();
     this.disposeBuilding();
     this.controls.dispose();
