@@ -189,6 +189,7 @@ export function parseBrief(text = '') {
   if (/退台/.test(src)) out.stepped = true;
   if (/哈尔滨|东北|严寒/.test(src)) out.climate = 'severe-cold';
   else if (/深圳|广州|南方|湿热/.test(src)) out.climate = 'hot-humid';
+  else if (/温和|温带/.test(src)) out.climate = 'temperate';
   return out;
 }
 

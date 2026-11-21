@@ -10,18 +10,21 @@
       </header>
 
       <div class="body">
-        <div class="form">
+        <div class="left-col">
           <div class="presets">
-            <span class="plabel">预设</span>
-            <button
-              v-for="p in presets"
-              :key="p.name"
-              class="preset"
-              :class="{ on: activePreset === p.name }"
-              @click="applyPreset(p)"
-            >{{ p.name }}</button>
+            <div v-for="g in presetGroups" :key="g.tag" class="preset-row">
+              <span class="ptag">{{ g.tag }}</span>
+              <button
+                v-for="p in g.items"
+                :key="p.name"
+                class="preset"
+                :class="{ on: activePreset === p.name }"
+                @click="applyPreset(p)"
+              >{{ p.name }}</button>
+            </div>
           </div>
 
+          <div class="form">
           <div v-for="g in groups" :key="g.key" class="group">
             <h4>{{ g.label }}</h4>
             <div class="fields">
@@ -36,15 +39,24 @@
                   <option v-for="o in it.options" :key="o.value" :value="o.value">{{ o.label }}</option>
                 </select>
 
-                <input
-                  v-else-if="it.type === 'number'"
-                  type="number"
-                  :min="it.min"
-                  :max="it.max"
-                  :step="it.step"
-                  :value="form[it.key]"
-                  @input="set(it.key, $event.target.valueAsNumber)"
-                />
+                <template v-else-if="it.type === 'number'">
+                  <input
+                    type="number"
+                    :min="it.min"
+                    :max="it.max"
+                    :step="it.step"
+                    :value="form[it.key]"
+                    @input="set(it.key, $event.target.valueAsNumber)"
+                  />
+                  <span v-if="it.quick" class="quick">
+                    <button
+                      v-for="q in it.quick"
+                      :key="q"
+                      :class="{ on: form[it.key] === q }"
+                      @click="set(it.key, q)"
+                    >{{ q }}</button>
+                  </span>
+                </template>
 
                 <span v-else-if="it.type === 'range'" class="range">
                   <input
@@ -56,6 +68,14 @@
                     @input="set(it.key, $event.target.valueAsNumber)"
                   />
                   <b>{{ form[it.key] }}</b>
+                  <span v-if="it.quick" class="quick">
+                    <button
+                      v-for="q in it.quick"
+                      :key="q"
+                      :class="{ on: form[it.key] === q }"
+                      @click="set(it.key, q)"
+                    >{{ q }}</button>
+                  </span>
                 </span>
 
                 <button
@@ -65,13 +85,19 @@
                   @click="set(it.key, !form[it.key])"
                 >{{ form[it.key] ? '开' : '关' }}</button>
 
-                <input
-                  v-else-if="it.type === 'text'"
-                  type="text"
-                  :placeholder="it.placeholder"
-                  :value="form[it.key]"
-                  @input="set(it.key, $event.target.value)"
-                />
+                <template v-else-if="it.type === 'text'">
+                  <input
+                    type="text"
+                    :placeholder="it.placeholder"
+                    :value="form[it.key]"
+                    :list="it.options ? `dl-${it.key}` : undefined"
+                    @input="set(it.key, $event.target.value)"
+                  />
+                  <datalist v-if="it.options" :id="`dl-${it.key}`">
+                    <option v-for="o in it.options" :key="o" :value="o" />
+                  </datalist>
+                  <em v-if="it.hint" class="hint">{{ it.hint }}</em>
+                </template>
 
                 <input
                   v-else-if="it.type === 'textarea'"
@@ -94,6 +120,7 @@
               </label>
             </div>
           </div>
+        </div>
         </div>
 
         <div class="preview">
@@ -155,7 +182,15 @@ const activePreset = ref('');
 let timer = null;
 
 const groups = computed(() => schema.value?.groups || []);
-const presets = computed(() => schema.value?.presets || []);
+const presetGroups = computed(() => {
+  const map = new Map();
+  for (const p of schema.value?.presets || []) {
+    const tag = p.tag || '其他';
+    if (!map.has(tag)) map.set(tag, []);
+    map.get(tag).push(p);
+  }
+  return [...map.entries()].map(([tag, items]) => ({ tag, items }));
+});
 
 async function load() {
   const data = await getPromptParams();
@@ -249,10 +284,16 @@ onMounted(load);
 .x { font-size: 18px; color: var(--muted); padding: 0 4px; }
 
 .body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.form { overflow-y: auto; padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 14px; border-right: 1px solid var(--line); }
+.left-col { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.form { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 18px 18px; display: flex; flex-direction: column; gap: 14px; }
 
-.presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.plabel { font-size: 10.5px; color: #6f7d8b; letter-spacing: 0.1em; }
+.presets {
+  flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
+  max-height: 148px; overflow-y: auto;
+  padding: 12px 18px 10px; border-bottom: 1px solid var(--line);
+}
+.preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ptag { flex: 0 0 62px; font-size: 10px; color: #6f7d8b; letter-spacing: 0.04em; }
 .preset {
   font-size: 11px; padding: 4px 9px; border-radius: 999px;
   border: 1px solid var(--line); color: #9fb0c0;
@@ -269,15 +310,23 @@ onMounted(load);
   color: var(--text); font-size: 12px; padding: 7px 9px; outline: none; min-width: 0;
 }
 .field select:focus, .field input:focus { border-color: #3d4b5c; }
-.range { display: flex; align-items: center; gap: 8px; }
+.range { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .range input { flex: 1; accent-color: #d5a35c; }
 .range b { font-size: 12px; color: var(--accent); min-width: 20px; text-align: right; }
+.quick { display: flex; flex-wrap: wrap; gap: 4px; }
+.field.type-number .quick, .range .quick { margin-top: 1px; flex-basis: 100%; }
+.quick button {
+  font-size: 10px; padding: 2px 6px; border-radius: 5px;
+  border: 1px solid #26313e; color: #8b9aa8; background: transparent;
+}
+.quick button.on { border-color: rgba(213, 163, 92, 0.5); color: var(--accent); background: rgba(213, 163, 92, 0.1); }
+.hint { font-style: normal; font-size: 10px; color: #66727f; }
 .switch {
   align-self: flex-start; font-size: 11px; padding: 5px 12px; border-radius: 999px;
   border: 1px solid var(--line); color: #8fa0b1;
 }
 .switch.on { border-color: rgba(95, 191, 139, 0.4); color: #9fe0bd; background: rgba(95, 191, 139, 0.1); }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 128px; overflow-y: auto; }
 .chip { font-size: 11px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); color: #9fb0c0; }
 .chip.on { border-color: rgba(213, 163, 92, 0.55); color: #f1e4cd; background: rgba(213, 163, 92, 0.13); }
 
