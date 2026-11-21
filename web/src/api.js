@@ -158,6 +158,11 @@ export function paletteFromImage(file, count = 6) {
           const b = data[i + 2];
           const a = data[i + 3];
           if (a < 200) continue;
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          // Drop deep shadow / blown-out sky and foliage: those pixels describe
+          // the photograph, not the facade material.
+          if (lum < 52 || lum > 236) continue;
+          if (g > r + 14 && g > b + 14) continue;
           const key = `${Math.round(r / 32)}-${Math.round(g / 32)}-${Math.round(b / 32)}`;
           const prev = buckets.get(key) || { n: 0, r: 0, g: 0, b: 0 };
           prev.n += 1;

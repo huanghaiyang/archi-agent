@@ -113,6 +113,49 @@ $env:HY4_BASE_URL="http://127.0.0.1:8000/v1"; $env:AGENT_MODE="hy4"; npm run dev
 
 模型参数按官方推荐：`temperature=0.9`、`top_p=1.0`；`reasoning_effort` 通过 `chat_template_kwargs` 传入。
 
+## 本地模型部署（不重启也能换模型）
+
+除了环境变量，模型配置也可以直接在界面右上角的模型 chip 里改，写入 `server/data/settings.json`（tmp+rename 原子写），下次启动自动生效，优先级高于环境变量。
+
+| `provider` | 指向 | 说明 |
+| --- | --- | --- |
+| `auto` | 先 Hy4 `:8000`，再 Ollama `:11434` | 探测不到就回退本地确定性引擎 |
+| `hy4` | `MODEL_BASE_URL` / `HY4_BASE_URL` | 走 `chat_template_kwargs.reasoning_effort`、`tools` |
+| `ollama` | `http://127.0.0.1:11434/v1` | 需 `ollama serve` + 一个 7B 级模型 |
+| `openai` / `local` | 任意 OpenAI 兼容端点（llama.cpp / vLLM / LM Studio） | 不发 `reasoning_effort`，避免被拒 |
+
+```bash
+# 本机最轻的一条路径：Ollama
+ollama pull qwen2.5:7b
+ollama serve
+# 然后在界面里选 ollama / 或：
+MODEL_PROVIDER=ollama MODEL_NAME=qwen2.5:7b npm start
+```
+
+设置面板里的「测试连接」是 5s 探测（`/api/settings/test`），只验证 `/models` 或一次轻量补全能否返回，不代表模型会设计房子。`GET /api/health` 会回报 `provider / model / baseUrl / vision / hy4.reachable`。
+
+## 参考图出方案
+
+对话输入框左下角的「参考图」可以传一张图，前端先压到 1280px、并在图片中部采样 6 个主色（跳过天空过曝、阴影和植被像素），随后：
+
+1. 若当前 provider 支持视觉（`/api/health` 的 `vision=true`），把图交给模型，要求一行 JSON：`{programme, style, floors, materials, description}`；
+2. 否则（或模型返回不合规）用主色做加权 RGB 距离匹配最近的墙材风格（青砖→brick、木格栅→timber、铝/蓝玻→tech、白涂料→minimal、暖灰混凝土→concrete）；
+3. 拼成任务书交给 Agent，**但用户在输入框里写的功能与层数优先**——写「做 6 层住宅」，参考图不会把它改成「4 层图书馆」。
+
+参考图会落盘到 `server/data/refs/`，随会话一起恢复；`POST /api/reference` 可以只解析不生成方案。
+
+## 成品库 / 回收站 / 风格分类
+
+左栏三个页签：**对话 / 成品库 / 回收站**。
+
+- 方案生成后点「存入当前方案」，会用 `ArchiViewer.captureThumbnail()` 抓一张 520px 的 JPEG 缩略图存进库；
+- 每项带 `title / style / programme / tags / summary(GFA、FAR、密度、窗地比、层数、房间数、高度) / spec / thumb / reference`；
+- 列表支持标题搜索、按「最新 / 最早 / 名称 / 面积」排序、**风格 chip 与功能 chip 双维过滤**（chip 上带命中数，0 命中自动置灰）；
+- 删除是软删除（进 `trash.json`，缩略图与参考图保留），回收站可「恢复」或「彻底删除」（后者连 `thumbs/`、`refs/` 里的文件一起清掉），也可一键清空；
+- 6 种风格：`极简白 / 工业记忆 / 木构暖色 / 金属科技 / 砖砌传统 / 暖灰清水混凝土`；6 类功能：`社区图书馆 / 企业办公楼 / 住宅 / 美术馆 / 教学楼 / 社区中心`。从成品库「打开」会把 spec 回写到当前会话（`POST /api/spec`），后续编辑才对得上。
+
+数据层：`server/data/{library,trash}.json`、`sessions/<sid>.json`（保留最近 30 轮对话 + 参考图 + spec）、`thumbs/`、`refs/`。这些运行数据不入库，`.gitignore` 已排除，仓库里只留 `.gitkeep`。
+
 ## 智能体的 9 个工具
 
 模型只被允许通过工具改动方案，几何永远由引擎生成。
