@@ -1,0 +1,21 @@
+{
+  "name": "building-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Architectural design agent powered by open-source Tencent Hunyuan Hy4, with a Vue3 + Three.js viewer",
+  "type": "module",
+  "scripts": {
+    "install:all": "npm --prefix web install",
+    "dev": "node scripts/dev.js",
+    "dev:server": "node server/src/index.js",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "node server/src/index.js",
+    "demo": "node scripts/smoke.js",
+    "mock:hy4": "node scripts/mock-hy4.js",
+    "test:hy4": "node scripts/test-hy4-loop.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

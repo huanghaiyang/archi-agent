@@ -1,0 +1,39 @@
+:root {
+  --bg: #0d1116;
+  --panel: #141a22;
+  --panel-2: #1a222c;
+  --line: #26313e;
+  --text: #e7ecf2;
+  --muted: #93a1b0;
+  --accent: #d5a35c;
+  --accent-soft: rgba(213, 163, 92, 0.14);
+  --ok: #5fbf8b;
+  --warn: #e0b25a;
+  --fail: #e27961;
+  --radius: 12px;
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+body { overflow: hidden; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #2b3542; border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }

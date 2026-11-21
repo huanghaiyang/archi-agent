@@ -1,0 +1,410 @@
+// Zero-dependency HTTP server: SSE chat, reference-image intake, finished
+// scheme library (with recycle bin), model settings, static viewer hosting.
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { config, publicSettings, saveSettings } from './config.js';
+import { probeModel, probeProvider } from './agent/llm.js';
+import { createSession, runAgent } from './agent/loop.js';
+import { digest } from './agent/tools.js';
+import { finalize } from './design/spec.js';
+import { analyzeReference, referenceBrief } from './design/reference.js';
+import {
+  addLibraryItem,
+  dropSessionState,
+  emptyTrash,
+  getLibraryItem,
+  listLibrary,
+  listTrash,
+  loadSessionState,
+  moveToTrash,
+  purgeFromTrash,
+  restoreFromTrash,
+  saveReferenceImage,
+  saveSessionState,
+  updateLibraryItem,
+} from './store.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '../..');
+const DIST = path.join(ROOT, 'web', 'dist');
+
+const sessions = new Map();
+
+function getSession(sid = 'demo') {
+  if (!sessions.has(sid)) {
+    const saved = loadSessionState(sid);
+    const session = createSession('');
+    if (saved) {
+      session.brief = saved.brief || '';
+      session.history = Array.isArray(saved.history) ? saved.history : [];
+      session.spec = saved.spec || null;
+      session.reference = saved.reference || null;
+    }
+    sessions.set(sid, session);
+  }
+  return sessions.get(sid);
+}
+
+const persist = (sid, session) => saveSessionState(sid, {
+  brief: session.brief,
+  history: session.history,
+  spec: session.spec,
+  reference: session.reference
+    ? { url: session.reference.url, analysis: session.reference.analysis, at: session.reference.at }
+    : null,
+});
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.glb': 'model/gltf-binary',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json',
+};
+
+function json(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(body);
+}
+
+function readBody(req, limit = 14 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new Error('请求体过大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try {
+        resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {});
+      } catch {
+        reject(new Error('请求体不是合法 JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function serveFile(res, filePath, cache = 'public, max-age=3600') {
+  const ext = path.extname(filePath).toLowerCase();
+  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': cache });
+  fs.createReadStream(filePath).pipe(res);
+}
+
+/** /media/<kind>/<name> -> server/data/<kind>/<name> */
+function serveMedia(res, pathname) {
+  const rel = pathname.replace('/media/', '').split('/');
+  if (rel.length !== 2 || !/^[A-Za-z0-9_-]+\.(png|jpg|jpeg|webp)$/i.test(rel[1])) {
+    res.writeHead(404).end('not found');
+    return;
+  }
+  const file = path.join(config.dataDir, rel[0], rel[1]);
+  if (!file.startsWith(config.dataDir) || !fs.existsSync(file)) {
+    res.writeHead(404).end('not found');
+    return;
+  }
+  serveFile(res, file, 'public, max-age=86400');
+}
+
+function serveStatic(req, res) {
+  const url = new URL(req.url, 'http://localhost');
+  const clean = decodeURIComponent(url.pathname);
+  let filePath = path.join(DIST, clean === '/' ? 'index.html' : clean);
+  if (!filePath.startsWith(DIST)) {
+    res.writeHead(403).end('forbidden');
+    return;
+  }
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    if (!fs.existsSync(DIST)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(fallbackPage());
+      return;
+    }
+    filePath = path.join(DIST, 'index.html'); // SPA fallback
+  }
+  serveFile(res, filePath, path.extname(filePath) === '.html' ? 'no-store' : 'public, max-age=3600');
+}
+
+function fallbackPage() {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<title>筑野 ARCHI-AGENT</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;height:100vh;margin:0}
+.card{max-width:520px;padding:32px;border:1px solid #2a323d;border-radius:14px;line-height:1.8}
+code{background:#161b22;padding:2px 6px;border-radius:4px}</style>
+<div class="card"><h2>前端尚未构建</h2>
+<p>先安装并启动 Vue + Three.js 查看器：</p>
+<p><code>npm run install:all</code><br><code>npm run dev:web</code></p>
+<p>或构建后由本服务直接托管：<code>npm run build</code> 再刷新本页。</p></div></html>`;
+}
+
+async function handleChat(req, res, body) {
+  const message = String(body.message || '').trim();
+  const sid = body.sid || 'demo';
+  if (!message && !body.image) return json(res, 400, { error: 'message 或 image 必填' });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  let closed = false;
+  req.on('close', () => { closed = true; });
+  const emit = (event) => {
+    if (closed) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const session = getSession(sid);
+  let enriched = message;
+  try {
+    if (body.image) {
+      emit({ type: 'status', text: '正在读取参考图：功能、体量、材质与色彩…' });
+      const referenceUrl = saveReferenceImage(body.image);
+      const analysis = await analyzeReference({
+        image: body.image,
+        palette: Array.isArray(body.palette) ? body.palette : [],
+        hint: message,
+      });
+      session.reference = { url: referenceUrl, analysis, at: Date.now(), dataUrl: body.image };
+      emit({ type: 'reference', reference: session.reference });
+      enriched = referenceBrief(analysis, { hint: message, dimensions: body.dimensions || {} });
+      emit({ type: 'status', text: `参考图解析：${analysis.description || analysis.style}（${analysis.source === 'vision' ? '视觉模型' : '主色匹配'}）` });
+    }
+    await runAgent({ session, message: enriched, mode: body.mode, emit });
+    finalize(session.spec);
+    persist(sid, session);
+  } catch (err) {
+    emit({ type: 'error', text: err.message || '服务异常' });
+  }
+  emit({ type: 'end' });
+  res.end();
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  const p = url.pathname;
+  const method = req.method;
+
+  try {
+    // ---------------------------------------------------------------- system
+    if (p === '/api/health') {
+      const probe = await probeModel();
+      return json(res, 200, {
+        ok: true,
+        mode: config.mode,
+        provider: config.provider.type,
+        model: config.provider.model,
+        baseUrl: config.provider.baseUrl,
+        vision: Boolean(config.provider.vision),
+        hy4: { baseUrl: config.provider.baseUrl, model: config.provider.model, reasoning: config.provider.reasoning, ...probe },
+        build: fs.existsSync(DIST),
+        sessions: sessions.size,
+        library: { total: listLibrary().total, trash: listTrash().total },
+      });
+    }
+
+    if (p === '/api/settings' && method === 'GET') return json(res, 200, publicSettings());
+    if (p === '/api/settings' && method === 'POST') {
+      const body = await readBody(req);
+      return json(res, 200, { ok: true, settings: publicSettings(), saved: saveSettings(body) });
+    }
+    if (p === '/api/settings/test' && method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const provider = { ...config.provider, ...(body.provider || {}) };
+      const probe = await probeProvider(provider, 5000);
+      return json(res, 200, probe);
+    }
+
+    // --------------------------------------------------------------- session
+    if (p === '/api/spec' && method === 'GET') {
+      const session = getSession(url.searchParams.get('sid') || 'demo');
+      if (!session.spec?.floors?.length) return json(res, 200, { spec: null, reference: session.reference || null });
+      return json(res, 200, {
+        spec: session.spec,
+        digest: digest(session.spec),
+        reference: session.reference || null,
+        history: session.history || [],
+      });
+    }
+
+    if (p === '/api/spec' && method === 'POST') {
+      const body = await readBody(req);
+      const sid = body.sid || 'demo';
+      if (!body.spec?.floors?.length) return json(res, 400, { error: 'spec 不完整' });
+      const session = getSession(sid);
+      session.spec = body.spec;
+      session.brief = body.spec.meta?.brief || body.brief || '';
+      session.history = session.history || [];
+      persist(sid, session);
+      return json(res, 200, { ok: true });
+    }
+
+    if (p === '/api/history' && method === 'GET') {
+      const session = getSession(url.searchParams.get('sid') || 'demo');
+      return json(res, 200, {
+        messages: session.history || [],
+        spec: session.spec || null,
+        reference: session.reference || null,
+        brief: session.brief || '',
+      });
+    }
+
+    if (p === '/api/history' && method === 'DELETE') {
+      const sid = url.searchParams.get('sid') || 'demo';
+      sessions.delete(sid);
+      dropSessionState(sid);
+      return json(res, 200, { ok: true });
+    }
+
+    if (p === '/api/reset' && method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const sid = body.sid || 'demo';
+      sessions.set(sid, createSession(''));
+      dropSessionState(sid);
+      return json(res, 200, { ok: true });
+    }
+
+    // ----------------------------------------------------------------- design
+    if (p === '/api/reference' && method === 'POST') {
+      const body = await readBody(req);
+      if (!body.image) return json(res, 400, { error: 'image 必填（dataURL）' });
+      const referenceUrl = saveReferenceImage(body.image);
+      const analysis = await analyzeReference({
+        image: body.image,
+        palette: Array.isArray(body.palette) ? body.palette : [],
+        hint: String(body.message || ''),
+      });
+      return json(res, 200, { reference: { url: referenceUrl, analysis }, brief: referenceBrief(analysis, { hint: body.message, dimensions: body.dimensions }) });
+    }
+
+    if (p === '/api/design' && method === 'POST') {
+      const body = await readBody(req);
+      if (!body.message && !body.image) return json(res, 400, { error: 'message 必填' });
+      const sid = body.sid || 'demo';
+      if (body.reset) {
+        sessions.set(sid, createSession(''));
+        dropSessionState(sid);
+      }
+      const s = getSession(sid);
+      let message = String(body.message || '');
+      if (body.image) {
+        const analysis = await analyzeReference({ image: body.image, palette: body.palette || [], hint: message });
+        s.reference = { url: saveReferenceImage(body.image), analysis, at: Date.now(), dataUrl: body.image };
+        message = referenceBrief(analysis, { hint: message, dimensions: body.dimensions || {} });
+      }
+      const result = await runAgent({ session: s, message, mode: body.mode, emit: () => {} });
+      finalize(s.spec);
+      persist(sid, s);
+      return json(res, 200, {
+        text: result.text,
+        mode: result.mode,
+        spec: s.spec,
+        digest: digest(s.spec),
+        reference: s.reference || null,
+      });
+    }
+
+    if (p === '/api/chat' && method === 'POST') {
+      const body = await readBody(req);
+      return handleChat(req, res, body);
+    }
+
+    // ---------------------------------------------------------------- library
+    if (p === '/api/library' && method === 'GET') {
+      const q = url.searchParams;
+      return json(res, 200, listLibrary({
+        style: q.get('style'),
+        programme: q.get('programme'),
+        q: q.get('q'),
+        sort: q.get('sort') || 'newest',
+      }));
+    }
+
+    if (p === '/api/library' && method === 'POST') {
+      const body = await readBody(req);
+      const sid = body.sid || 'demo';
+      const session = sessions.get(sid);
+      const spec = body.spec || session?.spec || null;
+      if (!spec?.floors?.length) return json(res, 400, { error: '当前没有可入库的方案' });
+      const item = addLibraryItem({
+        title: body.title,
+        tags: body.tags,
+        thumbDataUrl: body.thumb,
+        spec,
+        reference: body.reference || session?.reference?.url || spec?.meta?.reference || null,
+        style: body.style || spec.meta.style,
+        programme: body.programme || spec.meta.programme,
+        source: body.source || 'chat',
+      });
+      return json(res, 200, { ok: true, item, library: listLibrary() });
+    }
+
+    if (p === '/api/trash' && method === 'GET') return json(res, 200, listTrash());
+    if (p === '/api/trash' && method === 'DELETE') return json(res, 200, { ok: true, removed: emptyTrash() });
+
+    const restoreMatch = p.match(/^\/api\/trash\/([^/]+)\/restore$/);
+    if (restoreMatch && method === 'POST') {
+      const item = restoreFromTrash(restoreMatch[1]);
+      if (!item) return json(res, 404, { error: '回收站里没有这一项' });
+      return json(res, 200, { ok: true, item, library: listLibrary(), trash: listTrash() });
+    }
+
+    const trashMatch = p.match(/^\/api\/trash\/([^/]+)$/);
+    if (trashMatch && method === 'DELETE') {
+      const ok = purgeFromTrash(trashMatch[1]);
+      return json(res, ok ? 200 : 404, ok ? { ok: true, trash: listTrash() } : { error: '回收站里没有这一项' });
+    }
+
+    const itemMatch = p.match(/^\/api\/library\/([^/]+)$/);
+    if (itemMatch) {
+      const id = itemMatch[1];
+      if (method === 'GET') {
+        const item = getLibraryItem(id);
+        if (!item) return json(res, 404, { error: '成品不存在' });
+        return json(res, 200, { item });
+      }
+      if (method === 'PATCH') {
+        const body = await readBody(req);
+        const item = updateLibraryItem(id, body);
+        if (!item) return json(res, 404, { error: '成品不存在' });
+        return json(res, 200, { ok: true, item, library: listLibrary() });
+      }
+      if (method === 'DELETE') {
+        const item = moveToTrash(id);
+        if (!item) return json(res, 404, { error: '成品不存在' });
+        return json(res, 200, { ok: true, item, library: listLibrary(), trash: listTrash() });
+      }
+    }
+
+    if (p.startsWith('/api/')) return json(res, 404, { error: 'not found' });
+    if (p.startsWith('/media/')) return serveMedia(res, p);
+    return serveStatic(req, res);
+  } catch (err) {
+    return json(res, 500, { error: err.message || '服务异常' });
+  }
+});
+
+server.listen(config.port, () => {
+  console.log(`\n  筑野 ARCHI-AGENT`);
+  console.log(`  server   http://127.0.0.1:${config.port}`);
+  console.log(`  model    ${config.provider.type} · ${config.provider.baseUrl} (${config.provider.model})`);
+  console.log(`  mode     ${config.mode}${fs.existsSync(DIST) ? '' : '  (web/dist 未构建，使用 vite dev 开发)'}\n`);
+});

@@ -1,0 +1,11 @@
+{
+  "name": "building-agent-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency agent server (Hy4 tool-calling loop + design engine)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}
