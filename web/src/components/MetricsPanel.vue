@@ -264,6 +264,33 @@
 
           <div class="section">
             <div class="section-head">
+              <h3>错层展示</h3>
+              <span class="count">{{ explode.spread.toFixed(1) }} m / 层</span>
+            </div>
+            <button class="toggle-line" :class="{ on: explode.on }" @click="toggleInterior('explode')">
+              <span>逐层错开</span>
+              <b>{{ explode.on ? '开' : '关' }}</b>
+            </button>
+            <label class="slider-row wide-label">
+              <span>水平错开</span>
+              <input type="range" min="0" max="8" step="0.1" :value="explode.spread" @input="setExplodeParam('explodeSpread', $event)" />
+              <b>{{ explode.spread.toFixed(1) }}m</b>
+            </label>
+            <label class="slider-row wide-label">
+              <span>竖向抬升</span>
+              <input type="range" min="0" max="6" step="0.1" :value="explode.lift" @input="setExplodeParam('explodeLift', $event)" />
+              <b>{{ explode.lift.toFixed(1) }}m</b>
+            </label>
+            <label class="slider-row wide-label">
+              <span>错开方向</span>
+              <input type="range" min="0" max="360" step="5" :value="explode.angle" @input="setExplodeParam('explodeAngle', $event)" />
+              <b>{{ Math.round(explode.angle) }}°</b>
+            </label>
+            <p class="hint">每层沿设定方向水平错开并逐层抬升；方向 45° 为屏幕右下，调整时自动开启错层。</p>
+          </div>
+
+          <div class="section">
+            <div class="section-head">
               <h3>楼层联通性测试</h3>
               <span class="count">{{ connectivity.points }} 个路径点</span>
             </div>
@@ -400,6 +427,7 @@ const axes = [
 const quickCuts = [25, 50, 75];
 const peel = ref(false);
 const glow = ref(false);
+const explode = reactive({ on: false, spread: 3.8, lift: 1.8, angle: 45 });
 const connectivity = reactive({ active: false, progress: 0, points: 0, duration: 0, hasPath: false });
 const cutSideLabel = computed(() => {
   if (section.axis === 'y') return section.flip ? '保留上部楼层' : '保留下部楼层';
@@ -461,6 +489,10 @@ function sync() {
   if (s.section) Object.assign(section, s.section);
   peel.value = Boolean(s.peel);
   glow.value = Boolean(s.glow);
+  explode.on = Boolean(s.explode);
+  if (s.explodeSpread != null) explode.spread = Number(s.explodeSpread);
+  if (s.explodeLift != null) explode.lift = Number(s.explodeLift);
+  if (s.explodeAngle != null) explode.angle = Number(s.explodeAngle);
   if (s.connectivity) Object.assign(connectivity, s.connectivity);
   if (selected.value) selected.value = props.viewer.getNodeInfo(selected.value.id);
 }
@@ -475,6 +507,10 @@ watch(
       if (s.section) Object.assign(section, s.section);
       peel.value = Boolean(s.peel);
       glow.value = Boolean(s.glow);
+      explode.on = Boolean(s.explode);
+      if (s.explodeSpread != null) explode.spread = Number(s.explodeSpread);
+      if (s.explodeLift != null) explode.lift = Number(s.explodeLift);
+      if (s.explodeAngle != null) explode.angle = Number(s.explodeAngle);
       if (s.connectivity) Object.assign(connectivity, s.connectivity);
     };
     v.onPick = (id) => select(id);
@@ -601,6 +637,14 @@ function toggleDraw() {
 function toggleInterior(key) {
   if (!props.viewer) return;
   props.viewer.setOption(key, !props.viewer.options[key]);
+  sync();
+}
+
+function setExplodeParam(key, event) {
+  if (!props.viewer) return;
+  const value = Number(event.target.value);
+  props.viewer.setOption(key, value);
+  if (!props.viewer.options.explode) props.viewer.setOption('explode', true);
   sync();
 }
 

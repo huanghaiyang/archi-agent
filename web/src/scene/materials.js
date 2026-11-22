@@ -21,6 +21,19 @@ const MAP_FOR = {
   'clay-tile': () => ({ map: stoneTex(), tile: 1.6 }),
   'green-roof': () => ({ map: grassTex(), tile: 1.6 }),
   stone: () => ({ map: stoneTex(), tile: 1.8 }),
+  sandstone: () => ({ map: stoneTex(), tile: 2.0 }),
+  limestone: () => ({ map: stoneTex(), tile: 2.2 }),
+  'lime-plaster': () => ({ map: plasterTex(), tile: 3 }),
+  stucco: () => ({ map: plasterTex(), tile: 2.6 }),
+  'rammed-earth': () => ({ map: plasterTex(), tile: 2.0 }),
+  'mud-brick': () => ({ map: brickTex(), tile: 2.2 }),
+  terracotta: () => ({ map: brickTex(), tile: 1.8 }),
+  'charred-timber': () => ({ map: woodTex(), tile: 1.4 }),
+  bamboo: () => ({ map: woodTex(), tile: 1.2 }),
+  slate: () => ({ map: stoneTex(), tile: 1.6 }),
+  copper: () => ({ map: metalTex(), tile: 2 }),
+  marble: () => ({ map: stoneTex(), tile: 2.4 }),
+  thatch: () => ({ map: grassTex(), tile: 1.2 }),
   'blue-glass': () => ({ map: null }),
   'clear-glass': () => ({ map: null }),
   'bronze-glass': () => ({ map: null }),
@@ -69,15 +82,25 @@ export class MaterialLibrary {
 
     if (key === 'glass') {
       const def = MATERIALS[role.glass] || MATERIALS['blue-glass'];
+      const tint = new THREE.Color(def.color);
       mat = new THREE.MeshPhysicalMaterial({
-        color: new THREE.Color(def.color).multiplyScalar(0.78),
-        roughness: 0.05,
-        metalness: 0.32,
-        transparent: true,
-        opacity: 0.74,
+        color: tint.clone().multiplyScalar(0.92),
+        // physically based glazing: real refraction + fresnel reflection,
+        // clearcoat for the polished outer face
+        metalness: 0.0,
+        roughness: 0.03,
+        transmission: 0.9,
+        thickness: 0.012,
+        ior: 1.52,
+        attenuationColor: tint.clone().lerp(new THREE.Color('#ffffff'), 0.35),
+        attenuationDistance: 1.6,
+        specularIntensity: 1.0,
         clearcoat: 1,
-        clearcoatRoughness: 0.04,
-        envMapIntensity: 1.35,
+        clearcoatRoughness: 0.03,
+        envMapIntensity: 1.8,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false,
         side: THREE.DoubleSide,
       });
       mat.userData.nightEmissive = new THREE.Color('#ffd9a0');

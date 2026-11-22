@@ -145,6 +145,62 @@ export const STYLES = {
     windowWidth: 1.8,
     gap: 1.2,
   },
+  // ---- global / regional styles
+  scandi: {
+    label: '北欧极简',
+    facade: { system: 'ribbon', materials: { wall: 'white-plaster', glass: 'clear-glass', frame: 'dark-metal', roof: 'slate', floorSlab: 'warm-concrete' } },
+    windowWidth: 2.4, gap: 0.9, roof: 'gable',
+  },
+  japanese: {
+    label: '日式木构',
+    facade: { system: 'screen', materials: { wall: 'timber-slat', glass: 'clear-glass', frame: 'charred-timber', roof: 'slate', floorSlab: 'bamboo' } },
+    windowWidth: 2.0, gap: 0.7, roof: 'gable',
+  },
+  chinese: {
+    label: '新中式',
+    facade: { system: 'punched', materials: { wall: 'grey-brick', glass: 'clear-glass', frame: 'charred-timber', roof: 'clay-tile', floorSlab: 'stone' } },
+    windowWidth: 1.6, gap: 1.5, roof: 'gable',
+  },
+  mediterranean: {
+    label: '地中海',
+    facade: { system: 'punched', materials: { wall: 'lime-plaster', glass: 'clear-glass', frame: 'dark-metal', roof: 'clay-tile', floorSlab: 'terracotta' } },
+    windowWidth: 1.6, gap: 1.4, roof: 'hip',
+  },
+  islamic: {
+    label: '伊斯兰',
+    facade: { system: 'punched', materials: { wall: 'sandstone', glass: 'bronze-glass', frame: 'copper', roof: 'clay-tile', floorSlab: 'stone' } },
+    windowWidth: 1.4, gap: 2.0, roof: 'flat',
+  },
+  tropical: {
+    label: '热带东南亚',
+    facade: { system: 'screen', materials: { wall: 'bamboo', glass: 'clear-glass', frame: 'dark-metal', roof: 'thatch', floorSlab: 'bamboo' } },
+    windowWidth: 2.2, gap: 0.7, roof: 'gable',
+  },
+  latin: {
+    label: '拉美',
+    facade: { system: 'punched', materials: { wall: 'terracotta', glass: 'clear-glass', frame: 'dark-metal', roof: 'clay-tile', floorSlab: 'stone' } },
+    windowWidth: 1.8, gap: 1.2, roof: 'flat',
+  },
+  african: {
+    label: '非洲夯土',
+    facade: { system: 'punched', materials: { wall: 'rammed-earth', glass: 'clear-glass', frame: 'charred-timber', roof: 'thatch', floorSlab: 'mud-brick' } },
+    windowWidth: 1.4, gap: 1.6, roof: 'gable',
+  },
+  prairie: {
+    label: '草原学派',
+    facade: { system: 'ribbon', materials: { wall: 'red-brick', glass: 'clear-glass', frame: 'copper', roof: 'metal-seam', floorSlab: 'stone' } },
+    windowWidth: 2.6, gap: 0.9, roof: 'hip',
+  },
+  artdeco: {
+    label: '装饰艺术',
+    facade: { system: 'punched', materials: { wall: 'marble', glass: 'bronze-glass', frame: 'copper', roof: 'metal-seam', floorSlab: 'marble' } },
+    windowWidth: 1.6, gap: 1.0, roof: 'flat',
+  },
+  alpine: {
+    label: '阿尔卑斯石构',
+    facade: { system: 'punched', materials: { wall: 'stone', glass: 'clear-glass', frame: 'charred-timber', roof: 'slate', floorSlab: 'stone' } },
+    windowWidth: 1.4, gap: 1.4, roof: 'gable',
+  },
 };
 
 export const PROGRAMME_KEYS = Object.keys(PROGRAMMES);
@@ -179,7 +235,18 @@ export function parseBrief(text = '') {
   else if (/(坡屋顶|双坡|坡屋)/.test(src)) out.roof = 'gable';
   else if (/平屋顶/.test(src)) out.roof = 'flat';
 
-  if (/(极简|纯白|白墙|minimal)/i.test(src)) out.style = 'minimal';
+  if (/(北欧|斯堪的纳维亚|scandi|nordic)/i.test(src)) out.style = 'scandi';
+  else if (/(日式|和风|japanese|zen)/i.test(src)) out.style = 'japanese';
+  else if (/(新中式|中式|东方|chinese)/i.test(src)) out.style = 'chinese';
+  else if (/(地中海|mediterranean|tuscan)/i.test(src)) out.style = 'mediterranean';
+  else if (/(伊斯兰|中东|摩洛哥|islamic|moorish)/i.test(src)) out.style = 'islamic';
+  else if (/(东南亚|热带|tropical|bali)/i.test(src)) out.style = 'tropical';
+  else if (/(拉美|墨西哥|拉丁|latin|mexican)/i.test(src)) out.style = 'latin';
+  else if (/(非洲|夯土|african|rammed)/i.test(src)) out.style = 'african';
+  else if (/(草原|prairie|american)/i.test(src)) out.style = 'prairie';
+  else if (/(装饰艺术|art\s*deco|artdeco)/i.test(src)) out.style = 'artdeco';
+  else if (/(阿尔卑斯|高山|石构|alpine)/i.test(src)) out.style = 'alpine';
+  else if (/(极简|纯白|白墙|minimal)/i.test(src)) out.style = 'minimal';
   else if (/(工业|红砖|厂房|loft)/i.test(src)) out.style = 'industrial';
   else if (/(木|木质|格栅|timber)/i.test(src)) out.style = 'timber';
   else if (/(科技|金属|铝板|玻璃幕墙)/.test(src)) out.style = 'tech';
@@ -418,10 +485,11 @@ export function generateDesign(briefText, options = {}) {
     sillHeight: 0.9,
     headClearance: 0.55,
     mullion: 0.08,
+    align: true,
     materials: { ...style.facade.materials },
   };
 
-  const roofType = p.roof || (p.stepped ? 'flat' : 'flat');
+  const roofType = p.roof || (p.stepped ? 'flat' : (style.roof || 'flat'));
   const spec = {
     version: '1.0',
     meta: {

@@ -18,6 +18,19 @@ export const MATERIALS = {
   'clay-tile': { label: '陶瓦屋面', color: '#8c4a3a', roughness: 0.8, metalness: 0.0 },
   'green-roof': { label: '种植屋面', color: '#5f7a4b', roughness: 1.0, metalness: 0.0 },
   'stone': { label: '石材', color: '#b8b2a6', roughness: 0.75, metalness: 0.0 },
+  'sandstone': { label: '砂岩', color: '#d9c4a3', roughness: 0.8, metalness: 0.0 },
+  'limestone': { label: '石灰岩', color: '#d6cfbf', roughness: 0.7, metalness: 0.0 },
+  'lime-plaster': { label: '石灰抹面', color: '#efe9dc', roughness: 0.92, metalness: 0.0 },
+  'stucco': { label: '灰泥', color: '#e5ddce', roughness: 0.95, metalness: 0.0 },
+  'rammed-earth': { label: '夯土', color: '#b58a63', roughness: 0.95, metalness: 0.0 },
+  'mud-brick': { label: '土坯砖', color: '#a9815f', roughness: 0.94, metalness: 0.0 },
+  'terracotta': { label: '陶土砖', color: '#b76445', roughness: 0.85, metalness: 0.0 },
+  'charred-timber': { label: '炭化木', color: '#3f3631', roughness: 0.85, metalness: 0.0 },
+  'bamboo': { label: '竹材', color: '#c2a15f', roughness: 0.78, metalness: 0.0 },
+  'slate': { label: '板岩', color: '#5a6068', roughness: 0.7, metalness: 0.0 },
+  'copper': { label: '铜板', color: '#7a5a43', roughness: 0.42, metalness: 0.65 },
+  'marble': { label: '大理石', color: '#e4e2dc', roughness: 0.35, metalness: 0.0 },
+  'thatch': { label: '茅草', color: '#b59a5e', roughness: 1.0, metalness: 0.0 },
 };
 
 export const ROOM_TYPES = {

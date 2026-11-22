@@ -169,7 +169,7 @@ export class ArchiViewer {
     window.addEventListener('pointerup', this._onSectionUp);
     window.addEventListener('pointercancel', this._onSectionUp);
 
-    this.options = { roof: true, labels: false, isolate: 0, explode: false, time: 'day', context: true, wireframe: false, peel: false, glow: false };
+    this.options = { roof: true, labels: false, isolate: 0, explode: false, explodeSpread: 3.8, explodeLift: 1.8, explodeAngle: 45, time: 'day', context: true, wireframe: false, peel: false, glow: false };
     this.section = { enabled: false, axis: 'z', offset: 50, flip: false, cap: true, angle: 0, drawMode: false };
     this.sectionRange = { x: [0, 1], y: [0, 1], z: [0, 1] };
     this.sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
@@ -243,25 +243,28 @@ export class ArchiViewer {
     const target = this.options.explode ? 1 : 0;
     this.explode += (target - this.explode) * Math.min(1, dt * 5);
     const k = this.explode;
-    // staggered exploded view: each storey slides down-screen-right as well as up,
-    // so the floor plates no longer stack on top of one another.
-    const spread = 3.8 * k;
-    const lift = 1.8 * k;
+    // staggered exploded view, adjustable from the inspector: each storey
+    // slides horizontally at `explodeAngle` and lifts `explodeLift` per floor.
+    const spread = (this.options.explodeSpread ?? 3.8) * k;
+    const lift = (this.options.explodeLift ?? 1.8) * k;
+    const ang = THREE.MathUtils.degToRad(this.options.explodeAngle ?? 45);
+    const dx = Math.cos(ang);
+    const dz = -Math.sin(ang);
     this.floorGroups.forEach((g) => {
       const lv = g.userData.level || 0;
-      g.position.set(lv * spread * 0.72, lv * lift, -lv * spread * 0.69);
+      g.position.set(lv * spread * dx, lv * lift, lv * spread * dz);
     });
     if (this.roofGroup) {
       const lv = this.roofGroup.userData.level || 0;
-      this.roofGroup.position.set(lv * spread * 0.72, lv * lift + 0.35 * k, -lv * spread * 0.69);
+      this.roofGroup.position.set(lv * spread * dx, lv * lift + 0.35 * k, lv * spread * dz);
     }
     if (this.labelsGroup) {
       this.labelsGroup.children.forEach((s) => {
         const lv = s.userData.level || 0;
         s.position.set(
-          (s.userData.baseX || 0) + lv * spread * 0.72,
+          (s.userData.baseX || 0) + lv * spread * dx,
           (s.userData.baseY || 0) + lv * lift,
-          (s.userData.baseZ || 0) - lv * spread * 0.69,
+          (s.userData.baseZ || 0) + lv * spread * dz,
         );
       });
     }
@@ -1384,6 +1387,10 @@ export class ArchiViewer {
       canUndo: this.hIndex >= 0,
       canRedo: this.hIndex < this.history.length - 1,
       wireframe: Boolean(this.options.wireframe),
+      explode: Boolean(this.options.explode),
+      explodeSpread: Number(this.options.explodeSpread),
+      explodeLift: Number(this.options.explodeLift),
+      explodeAngle: Number(this.options.explodeAngle),
       peel: Boolean(this.options.peel),
       glow: Boolean(this.options.glow),
       section: this.getSection(),

@@ -119,6 +119,7 @@ export function normalizeAgentSpec(raw = {}, base) {
       gap: clamp(num(f.gap, spec.facade.gap), 0.3, 3),
       sillHeight: clamp(num(f.sillHeight, spec.facade.sillHeight), 0.3, 1.6),
       headClearance: clamp(num(f.headClearance, spec.facade.headClearance), 0.2, 1.2),
+      align: f.align !== false,
       materials: mats,
     };
   }

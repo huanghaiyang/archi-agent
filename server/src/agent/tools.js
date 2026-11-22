@@ -13,7 +13,7 @@ import {
   regenerate,
 } from '../design/spec.js';
 import { MATERIAL_KEYS, ROOM_TYPE_KEYS, MATERIALS, ROOM_TYPES } from '../design/palette.js';
-import { PROGRAMME_KEYS, STYLE_KEYS } from '../design/generator.js';
+import { PROGRAMME_KEYS, STYLE_KEYS, STYLES } from '../design/generator.js';
 
 const SIDES = ['n', 's', 'e', 'w'];
 
@@ -31,7 +31,7 @@ export const tools = [
           site_width: { type: 'number', description: '场地东西向宽度(m)' },
           site_depth: { type: 'number', description: '场地南北向进深(m)' },
           area: { type: 'number', description: '目标总建筑面积(㎡)，可选' },
-          style: { type: 'string', enum: STYLE_KEYS, description: '立面风格' },
+          style: { type: 'string', enum: STYLE_KEYS, description: '立面风格，覆盖中国、日式、北欧、地中海、伊斯兰、热带、拉美、非洲、草原学派、装饰艺术、阿尔卑斯等全球风格' },
           roof: { type: 'string', enum: ['flat', 'gable', 'shed', 'hip'] },
           stepped: { type: 'boolean', description: '顶层是否退台' },
           climate: { type: 'string', enum: ['severe-cold', 'hot-humid', 'temperate'] },
@@ -69,6 +69,7 @@ export const tools = [
           windowWidth: { type: 'number', description: '单樘窗洞宽(m) 0.6-4' },
           gap: { type: 'number', description: '窗间墙宽(m) 0.3-3' },
           sillHeight: { type: 'number', description: '窗台高(m)' },
+          align: { type: 'boolean', description: '上下层窗洞按统一开间轴线对齐（默认 true）' },
           materials: {
             type: 'object',
             properties: {
@@ -345,5 +346,6 @@ export function paletteSummary() {
   return {
     materials: Object.entries(MATERIALS).map(([k, v]) => `${k}(${v.label})`).join('、'),
     roomTypes: Object.entries(ROOM_TYPES).map(([k, v]) => `${k}(${v.label})`).join('、'),
+    styles: Object.entries(STYLES).map(([k, v]) => `${k}(${v.label})`).join('、'),
   };
 }

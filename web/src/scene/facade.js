@@ -3,7 +3,7 @@
 // steps and signage.
 
 import * as THREE from 'three';
-import { windowBays } from '../../../shared/facade.js';
+import { windowBays, facadeBays, windowVertical } from '../../../shared/facade.js';
 import { facadeSegments } from '../../../shared/facade.js';
 
 const T = 0.3;
@@ -112,9 +112,13 @@ function buildSide({ batch, floor, spec, wx, wz, side }) {
       bar('frame', a, len, sill + winH, 0.06, 0.42, 0.14);
     } else {
       // punched openings with deep reveal + stone liner + projecting sill
-      const sill = 0.9;
-      const winH = Math.min(fh - sill - 0.55, 2.45);
-      const bays = windowBays(len, facade);
+      const { sill, height: winH } = windowVertical(fh, facade);
+      const aligned = facade.align !== false ? facadeBays(floor, side, facade) : null;
+      const bays = aligned
+        ? aligned
+          .filter((b) => b.a >= a - 0.001 && b.b <= a + len + 0.001)
+          .map((b) => ({ offset: b.a - a, width: b.width }))
+        : windowBays(len, facade);
       let cursor = a;
       for (const bay of bays) {
         const bs = a + bay.offset;

@@ -100,6 +100,7 @@ onMounted(() => {
     opts.time = s.lighting?.time || opts.time;
     opts.section = Boolean(s.section?.enabled);
     opts.peel = Boolean(s.peel);
+    opts.explode = Boolean(s.explode);
   });
   emit('viewer', viewer);
   if (props.spec) applySpec(props.spec);

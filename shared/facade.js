@@ -46,6 +46,23 @@ export function windowBays(span, facade = {}) {
   return bays;
 }
 
+/**
+ * Structural bay grid for one elevation, anchored on the full facade span.
+ * Using the whole span (rather than each room segment) keeps every floor on
+ * the same vertical opening axes, even when the room programme changes.
+ */
+export function facadeBays(floor, side, facade = {}) {
+  const fp = floor.footprint;
+  const alongX = side === 'n' || side === 's';
+  const start = alongX ? fp.x : fp.z;
+  const span = alongX ? fp.w : fp.d;
+  return windowBays(span, facade).map((b) => ({
+    a: start + b.offset,
+    b: start + b.offset + b.width,
+    width: b.width,
+  }));
+}
+
 export function windowVertical(floorHeight, facade = {}) {
   const sill = clamp(Number(facade.sillHeight) || 0.9, 0.3, 1.8);
   const head = clamp(Number(facade.headClearance) || 0.5, 0.2, 1.2);
@@ -144,10 +161,20 @@ export function facadeSegments(floor, side) {
 }
 
 export function floorGlassArea(floor, facade) {
+  const aligned = facade?.align !== false;
   let area = 0;
   for (const side of ['n', 's', 'e', 'w']) {
+    const axes = aligned ? facadeBays(floor, side, facade) : null;
+    const v = windowVertical(floor.height, facade);
     for (const seg of facadeSegments(floor, side)) {
-      if (seg.glazed) area += glassArea(seg.b - seg.a, floor.height, facade);
+      if (!seg.glazed) continue;
+      if (!axes) {
+        area += glassArea(seg.b - seg.a, floor.height, facade);
+        continue;
+      }
+      for (const bay of axes) {
+        if (bay.a >= seg.a + 0.04 && bay.b <= seg.b - 0.04) area += bay.width * v.height;
+      }
     }
   }
   return area;
