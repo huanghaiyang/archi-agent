@@ -13,6 +13,7 @@ import { finalize } from './design/spec.js';
 import { analyzeReference, referenceBrief, adoptLocalAnalysis } from './design/reference.js';
 import { PROGRAMMES, STYLES } from './design/generator.js';
 import { PARAM_SCHEMA, composePrompt } from './design/promptParams.js';
+import { LOG_DIR, logger, readLogTail, requestId } from './logger.js';
 import {
   addLibraryItem,
   dropSessionState,
@@ -77,7 +78,11 @@ const MIME = {
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body),
+  });
   res.end(body);
 }
 
@@ -242,6 +247,13 @@ async function handleChat(req, res, body) {
   const sid = body.sid || 'demo';
   if (!message && !body.image) return json(res, 400, { error: 'message 或 image 必填' });
 
+  const t0 = Date.now();
+  const rid = req._rid;
+  logger.info('chat', 'turn start', {
+    rid, sid, chars: message.length, image: Boolean(body.image), mode: body.mode || config.mode,
+    clientVision: body.analysis ? body.analysis.model || 'browser-vision' : null,
+  });
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
@@ -257,6 +269,7 @@ async function handleChat(req, res, body) {
 
   const session = getSession(sid);
   let enriched = message;
+  let result = null;
   try {
     if (body.image) {
       emit({ type: 'status', text: body.analysis ? '浏览器本地视觉模型正在解析参考图…' : '正在读取参考图：功能、体量、材质与色彩…' });
@@ -272,11 +285,17 @@ async function handleChat(req, res, body) {
       emit({ type: 'reference', reference: session.reference });
       enriched = referenceBrief(analysis, { hint: message, dimensions: body.dimensions || {} });
       emit({ type: 'status', text: `参考图解析：${analysis.description || analysis.style}（${analysis.source === 'browser' ? '浏览器本地视觉' : analysis.source === 'vision' ? '视觉模型' : '主色匹配'}）` });
+      logger.info('vision', 'reference analyzed', { rid, sid, source: analysis.source, model: analysis.model || null, style: analysis.style, programme: analysis.programme, description: analysis.description });
     }
-    await runAgent({ session, message: enriched, mode: body.mode, emit });
+    result = await runAgent({ session, message: enriched, mode: body.mode, emit });
     finalize(session.spec);
     persist(sid, session);
+    logger.info('chat', 'turn complete', {
+      rid, sid, mode: result?.mode, ms: Date.now() - t0,
+      floors: session.spec?.floors?.length || 0, gfa: session.spec?.metrics?.gfa || null,
+    });
   } catch (err) {
+    logger.error('chat', 'turn failed', { rid, sid, ms: Date.now() - t0, err });
     emit({ type: 'error', text: err.message || '服务异常' });
   }
   emit({ type: 'end' });
@@ -287,17 +306,53 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   const method = req.method;
+  const rid = requestId();
+  req._rid = rid;
+  const started = process.hrtime.bigint();
+  logger.debug('http', 'request', { rid, method, path: p, query: Object.fromEntries(url.searchParams), ip: req.socket?.remoteAddress, ua: req.headers['user-agent'] });
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    const fields = {
+      rid, method, path: p, status: res.statusCode, ms: Math.round(ms * 10) / 10,
+      bytes: res.getHeader('content-length') || null, ip: req.socket?.remoteAddress,
+    };
+    if (res.statusCode >= 500) logger.error('http', 'response', fields);
+    else if (res.statusCode >= 400) logger.warn('http', 'response', fields);
+    else logger.info('http', 'response', fields);
+  });
 
   // onnxruntime-web needs SharedArrayBuffer for its threaded WASM kernels; both
   // headers are required for cross-origin isolation. Everything the viewer loads
   // (models, assets) is same-origin, so require-corp is safe here.
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  res.setHeader('X-Request-Id', rid);
 
   try {
     if (method === 'GET' && p.startsWith('/models/')) return serveModel(req, res, p);
 
     // ---------------------------------------------------------------- system
+    if (p === '/api/logs' && method === 'GET') {
+      return json(res, 200, readLogTail({
+        limit: url.searchParams.get('limit') || 200,
+        level: url.searchParams.get('level') || null,
+        scope: url.searchParams.get('scope') || null,
+      }));
+    }
+
+    if (p === '/api/client-log' && method === 'POST') {
+      const body = await readBody(req, 1024 * 1024).catch(() => ({}));
+      const level = ['debug', 'info', 'warn', 'error'].includes(body.level) ? body.level : 'error';
+      logger[level]('client', String(body.message || 'client event'), {
+        rid: req._rid,
+        url: String(body.url || '').slice(0, 300),
+        clientScope: String(body.scope || '').slice(0, 80),
+        detail: body.fields || {},
+        ua: req.headers['user-agent'],
+      });
+      return json(res, 200, { ok: true });
+    }
+
     if (p === '/api/health') {
       const probe = await probeModel();
       return json(res, 200, {
@@ -320,7 +375,16 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/vision/local' && method === 'GET') return json(res, 200, localVisionStatus());
     if (p === '/api/settings' && method === 'POST') {
       const body = await readBody(req);
-      return json(res, 200, { ok: true, settings: publicSettings(), saved: saveSettings(body) });
+      const saved = saveSettings(body);
+      logger.info('settings', 'saved', {
+        rid: req._rid,
+        mode: saved.mode,
+        provider: saved.provider?.type,
+        model: saved.provider?.model,
+        localVision: saved.provider?.localVision,
+        hasKey: Boolean(saved.provider?.apiKey),
+      });
+      return json(res, 200, { ok: true, settings: publicSettings(), saved });
     }
     if (p === '/api/settings/test' && method === 'POST') {
       const body = await readBody(req).catch(() => ({}));
@@ -350,6 +414,7 @@ const server = http.createServer(async (req, res) => {
       session.brief = body.spec.meta?.brief || body.brief || '';
       session.history = session.history || [];
       persist(sid, session);
+      logger.info('session', 'spec adopted', { rid: req._rid, sid, floors: session.spec.floors.length, style: session.spec.meta?.style });
       return json(res, 200, { ok: true });
     }
 
@@ -390,6 +455,7 @@ const server = http.createServer(async (req, res) => {
           palette: Array.isArray(body.palette) ? body.palette : [],
           hint: String(body.message || ''),
         });
+      logger.info('vision', 'reference endpoint', { rid: req._rid, source: analysis.source, model: analysis.model || null, style: analysis.style, programme: analysis.programme });
       return json(res, 200, { reference: { url: referenceUrl, analysis }, brief: referenceBrief(analysis, { hint: body.message, dimensions: body.dimensions }) });    }
 
     // ------------------------------------------------- parameterised prompts
@@ -418,9 +484,12 @@ const server = http.createServer(async (req, res) => {
         dropSessionState(sid);
       }
       const s = getSession(sid);
+      const t0 = Date.now();
+      logger.info('design', 'agent design start', { rid: req._rid, sid, promptChars: built.prompt.length, style: built.params?.style, floors: built.params?.floors, mode: body.mode });
       const result = await runAgent({ session: s, message: built.prompt, mode: body.mode, emit: () => {} });
       finalize(s.spec);
       persist(sid, s);
+      logger.info('design', 'agent design done', { rid: req._rid, sid, mode: result.mode, ms: Date.now() - t0, floors: s.spec?.floors?.length });
       return json(res, 200, {
         text: result.text,
         mode: result.mode,
@@ -443,14 +512,18 @@ const server = http.createServer(async (req, res) => {
       }
       const s = getSession(sid);
       let message = String(body.message || '');
+      const t0 = Date.now();
+      logger.info('design', 'design start', { rid: req._rid, sid, chars: message.length, image: Boolean(body.image), mode: body.mode, reset: Boolean(body.reset) });
       if (body.image) {
         const analysis = await analyzeReference({ image: body.image, palette: body.palette || [], hint: message });
         s.reference = { url: saveReferenceImage(body.image), analysis, at: Date.now(), dataUrl: body.image };
         message = referenceBrief(analysis, { hint: message, dimensions: body.dimensions || {} });
+        logger.info('vision', 'design reference', { rid: req._rid, sid, source: analysis.source, model: analysis.model || null, style: analysis.style });
       }
       const result = await runAgent({ session: s, message, mode: body.mode, emit: () => {} });
       finalize(s.spec);
       persist(sid, s);
+      logger.info('design', 'design done', { rid: req._rid, sid, mode: result.mode, ms: Date.now() - t0, floors: s.spec?.floors?.length, gfa: s.spec?.metrics?.gfa });
       return json(res, 200, {
         text: result.text,
         mode: result.mode,
@@ -536,13 +609,45 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/media/')) return serveMedia(res, p);
     return serveStatic(req, res);
   } catch (err) {
+    logger.error('http.route', 'unhandled route error', {
+      rid, method, path: p, status: 500, err,
+    });
     return json(res, 500, { error: err.message || '服务异常' });
   }
 });
 
 server.listen(config.port, () => {
+  logger.info('boot', 'server listening', {
+    port: config.port,
+    mode: config.mode,
+    provider: config.provider.type,
+    baseUrl: config.provider.baseUrl,
+    model: config.provider.model,
+    vision: Boolean(config.provider.vision),
+    visionModel: config.provider.visionModel || config.provider.model,
+    build: fs.existsSync(DIST),
+    dataDir: config.dataDir,
+    logDir: LOG_DIR,
+  });
   console.log(`\n  筑野 ARCHI-AGENT`);
   console.log(`  server   http://127.0.0.1:${config.port}`);
   console.log(`  model    ${config.provider.type} · ${config.provider.baseUrl} (${config.provider.model})`);
-  console.log(`  mode     ${config.mode}${fs.existsSync(DIST) ? '' : '  (web/dist 未构建，使用 vite dev 开发)'}\n`);
+  console.log(`  mode     ${config.mode}${fs.existsSync(DIST) ? '' : '  (web/dist 未构建，使用 vite dev 开发)'}`);
+  console.log(`  log      ${LOG_DIR}\n`);
 });
+
+process.on('uncaughtException', (err) => {
+  logger.error('process', 'uncaughtException', { err });
+  // A corrupt process should not keep serving: let the supervisor restart it.
+  setTimeout(() => process.exit(1), 50).unref();
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('process', 'unhandledRejection', { err: reason instanceof Error ? reason : { message: String(reason) } });
+});
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    logger.info('boot', `received ${signal}, shutting down`, { sessions: sessions.size });
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1500).unref();
+  });
+}

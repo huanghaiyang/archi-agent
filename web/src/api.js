@@ -1,6 +1,8 @@
 // Browser API layer: SSE chat, session history, model settings, reference
 // images and the finished-scheme library.
 
+import { reportClientError } from './log.js';
+
 export const SID = (() => {
   const key = 'archi-agent-sid';
   let v = localStorage.getItem(key);
@@ -12,18 +14,36 @@ export const SID = (() => {
 })();
 
 async function req(path, options = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+  } catch (err) {
+    reportClientError('api', `network error: ${path}`, { path, method: options.method || 'GET', error: err.message }, 'error');
+    throw err;
+  }
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    reportClientError('api', `HTTP ${res.status}: ${path}`, { path, status: res.status, detail: json.error || '', method: options.method || 'GET' }, res.status >= 500 ? 'error' : 'warn');
+    throw new Error(json.error || `HTTP ${res.status}`);
+  }
   return json;
 }
 
 export const getHealth = async () => {
-  const res = await fetch('/api/health');
-  if (!res.ok) throw new Error(`health ${res.status}`);
+  let res;
+  try {
+    res = await fetch('/api/health');
+  } catch (err) {
+    reportClientError('api', 'health request failed', { path: '/api/health', error: err.message });
+    throw err;
+  }
+  if (!res.ok) {
+    reportClientError('api', `health ${res.status}`, { path: '/api/health', status: res.status }, 'warn');
+    throw new Error(`health ${res.status}`);
+  }
   return res.json();
 };
 

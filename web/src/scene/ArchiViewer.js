@@ -182,6 +182,11 @@ export class ArchiViewer {
     this.connectivityGroup = null;
     this.connectivityBall = null;
     this.connectivityCurve = null;
+    this.connectivityTube = null;
+    this.connectivityBasePoints = [];
+    this.connectivityPointLevels = [];
+    this._connExplodeKey = '';
+    this._connTubeAt = 0;
     this.onConnectivity = null;
     this._lastConnNotify = 0;
     this.spec = null;
@@ -237,6 +242,26 @@ export class ArchiViewer {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Lowest storey stays pinned: floor 1, or the lowest basement if present. */
+  explodeAnchor() {
+    const levels = this.floorGroups.map((g) => Number(g.userData.level)).filter((n) => Number.isFinite(n));
+    return levels.length ? Math.min(...levels) : 0;
+  }
+
+  explodeOffset(level, k = this.explode) {
+    if (!k) return { x: 0, y: 0, z: 0 };
+    const anchor = this._explodeAnchor ?? this.explodeAnchor();
+    const storey = Math.max(0, Number(level || 0) - anchor);
+    const spread = (this.options.explodeSpread ?? 3.8) * k;
+    const lift = (this.options.explodeLift ?? 1.8) * k;
+    const ang = THREE.MathUtils.degToRad(this.options.explodeAngle ?? 45);
+    return {
+      x: storey * spread * Math.cos(ang),
+      y: storey * lift,
+      z: storey * spread * -Math.sin(ang),
+    };
+  }
+
   animate() {
     this.raf = requestAnimationFrame(this.animate);
     const dt = Math.min(0.05, this.clock.getDelta());
@@ -245,27 +270,22 @@ export class ArchiViewer {
     const k = this.explode;
     // staggered exploded view, adjustable from the inspector: each storey
     // slides horizontally at `explodeAngle` and lifts `explodeLift` per floor.
-    const spread = (this.options.explodeSpread ?? 3.8) * k;
-    const lift = (this.options.explodeLift ?? 1.8) * k;
-    const ang = THREE.MathUtils.degToRad(this.options.explodeAngle ?? 45);
-    const dx = Math.cos(ang);
-    const dz = -Math.sin(ang);
+    // Storey offsets are relative to the lowest storey, which stays pinned:
+    // ground floor when there is no basement, otherwise the lowest basement.
+    this._explodeAnchor = this.explodeAnchor();
+    const shift = (level) => this.explodeOffset(level, k);
     this.floorGroups.forEach((g) => {
-      const lv = g.userData.level || 0;
-      g.position.set(lv * spread * dx, lv * lift, lv * spread * dz);
+      const o = shift(g.userData.level);
+      g.position.set(o.x, o.y, o.z);
     });
     if (this.roofGroup) {
-      const lv = this.roofGroup.userData.level || 0;
-      this.roofGroup.position.set(lv * spread * dx, lv * lift + 0.35 * k, lv * spread * dz);
+      const o = shift(this.roofGroup.userData.level);
+      this.roofGroup.position.set(o.x, o.y + 0.35 * k, o.z);
     }
     if (this.labelsGroup) {
       this.labelsGroup.children.forEach((s) => {
-        const lv = s.userData.level || 0;
-        s.position.set(
-          (s.userData.baseX || 0) + lv * spread * dx,
-          (s.userData.baseY || 0) + lv * lift,
-          (s.userData.baseZ || 0) + lv * spread * dz,
-        );
+        const o = shift(s.userData.level);
+        s.position.set((s.userData.baseX || 0) + o.x, (s.userData.baseY || 0) + o.y, (s.userData.baseZ || 0) + o.z);
       });
     }
     this.selectionHelper?.update();
@@ -1058,15 +1078,17 @@ export class ArchiViewer {
     const wx = (x) => x - siteW / 2;
     const wz = (z) => z - siteD / 2;
 
-    const f0 = spec.floors[0];
-    const fp = f0.footprint;
-    const points = [];
+    const ground = spec.floors.find((f) => Number(f.level) >= 1) || spec.floors[0];
+    const fp = ground.footprint;
+    const route = [];
+    const push = (point, level) => route.push({ point, level });
     const entryX = wx(fp.x + fp.w / 2);
     const entryZ = wz(fp.z + fp.d);
-    points.push(new THREE.Vector3(entryX, 0.3, entryZ + 2.2));
-    points.push(new THREE.Vector3(entryX, 0.3, entryZ - 1.4));
+    push(new THREE.Vector3(entryX, ground.elevation + 0.3, entryZ + 2.2), ground.level);
+    push(new THREE.Vector3(entryX, ground.elevation + 0.3, entryZ - 1.4), ground.level);
 
     for (const floor of spec.floors) {
+      if (Number(floor.level) < Number(ground.level)) continue;
       const core = floor.core;
       if (!core) continue;
       const run = Math.min(0.3, (core.d * 0.62) / 14);
@@ -1075,18 +1097,19 @@ export class ArchiViewer {
       const x = wx(core.x + 0.2 + stairW / 2);
       const z0 = wz(core.z + 0.2);
       // corridor → stair foot
-      points.push(new THREE.Vector3(x, floor.elevation + 0.32, z0 - 1.2));
+      push(new THREE.Vector3(x, floor.elevation + 0.32, z0 - 1.2), floor.level);
       for (let i = 0; i < 14; i += 1) {
-        points.push(new THREE.Vector3(x, floor.elevation + rise * (i + 1) + 0.32, z0 + run * (i + 1)));
+        push(new THREE.Vector3(x, floor.elevation + rise * (i + 1) + 0.32, z0 + run * (i + 1)), floor.level);
       }
       // top landing
-      points.push(new THREE.Vector3(x, floor.elevation + floor.height + 0.32, z0 + core.d * 0.62));
+      push(new THREE.Vector3(x, floor.elevation + floor.height + 0.32, z0 + core.d * 0.62), floor.level);
     }
 
     const top = spec.floors[spec.floors.length - 1];
     const tfp = top.footprint;
-    points.push(new THREE.Vector3(wx(tfp.x + tfp.w / 2), top.elevation + top.height + 0.32, wz(tfp.z + tfp.d / 2)));
+    push(new THREE.Vector3(wx(tfp.x + tfp.w / 2), top.elevation + top.height + 0.32, wz(tfp.z + tfp.d / 2)), top.level);
 
+    const points = route.map((item) => item.point);
     const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.18);
     const length = curve.getLength();
     const group = new THREE.Group();
@@ -1112,6 +1135,11 @@ export class ArchiViewer {
     this.connectivityGroup = group;
     this.connectivityBall = ball;
     this.connectivityCurve = curve;
+    this.connectivityTube = tube;
+    this.connectivityBasePoints = points.map((p) => p.clone());
+    this.connectivityPointLevels = route.map((item) => item.level);
+    this._connExplodeKey = '';
+    this._connTubeAt = 0;
     this.connectivity.duration = Math.max(5, length / 3.6);
     this.connectivity.points = points.length;
     this.connectivity.hasPath = true;
@@ -1120,8 +1148,57 @@ export class ArchiViewer {
     return true;
   }
 
+  /** Rebuild the route control points in exploded space. The path is stored
+   *  per-floor so every point follows the storey it belongs to. */
+  refreshConnectivityCurve() {
+    if (!this.connectivityBasePoints.length) return null;
+    const points = this.connectivityBasePoints.map((base, i) => {
+      const o = this.explodeOffset(this.connectivityPointLevels[i]);
+      return new THREE.Vector3(base.x + o.x, base.y + o.y, base.z + o.z);
+    });
+    const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.18);
+    this.connectivityCurve = curve;
+    this.connectivity.duration = Math.max(5, curve.getLength() / 3.6);
+    return curve;
+  }
+
+  refreshConnectivityTube(curve = this.connectivityCurve) {
+    if (!this.connectivityTube || !curve) return;
+    const length = curve.getLength();
+    const geometry = new THREE.TubeGeometry(curve, Math.max(64, Math.round(length * 4)), 0.09, 6, false);
+    this.connectivityTube.geometry?.dispose();
+    this.connectivityTube.geometry = geometry;
+  }
+
+  /** Keep path + ball glued to the exploded floors while the animation runs. */
+  ensureConnectivityForExplode(force = false) {
+    if (!this.connectivityBasePoints.length) return;
+    const key = [
+      this.explode.toFixed(3),
+      this.options.explodeSpread ?? 3.8,
+      this.options.explodeLift ?? 1.8,
+      this.options.explodeAngle ?? 45,
+      this._explodeAnchor ?? this.explodeAnchor(),
+    ].join('|');
+    if (!force && key === this._connExplodeKey) return;
+    this._connExplodeKey = key;
+    const curve = this.refreshConnectivityCurve();
+    const now = Date.now();
+    // Tube geometry is heavier than the curve itself; throttle to ~12 fps while
+    // the storeys are sliding, it still reads as a continuous orange path.
+    if (force || !this._connTubeAt || now - this._connTubeAt > 80) {
+      this.refreshConnectivityTube(curve);
+      this._connTubeAt = now;
+    }
+    if (this.connectivityBall && curve) {
+      this.connectivityBall.position.copy(curve.getPointAt(this.connectivity.t));
+    }
+  }
+
   runConnectivity() {
     if (!this.connectivityCurve && !this.buildConnectivity()) return null;
+    this._connExplodeKey = '';
+    this.ensureConnectivityForExplode(true);
     this.connectivityGroup.visible = true;
     this.connectivityBall.visible = true;
     this.connectivity.t = 0;
@@ -1138,6 +1215,8 @@ export class ArchiViewer {
     this.connectivity.t = 0;
     this.connectivity.progress = 0;
     if (this.connectivityGroup) this.connectivityGroup.visible = false;
+    this._connExplodeKey = '';
+    this.ensureConnectivityForExplode(true);
     if (this.connectivityBall && this.connectivityCurve) {
       this.connectivityBall.position.copy(this.connectivityCurve.getPointAt(0));
     }
@@ -1147,6 +1226,9 @@ export class ArchiViewer {
   }
 
   animateConnectivity(dt) {
+    if (!this.connectivityBasePoints.length) return;
+    if (!this.connectivity.active && !this.connectivityGroup?.visible) return;
+    this.ensureConnectivityForExplode();
     if (!this.connectivity.active || !this.connectivityCurve) return;
     this.connectivity.t = Math.min(1, this.connectivity.t + dt / Math.max(1, this.connectivity.duration));
     const p = this.connectivityCurve.getPointAt(this.connectivity.t);
@@ -1181,6 +1263,10 @@ export class ArchiViewer {
     this.connectivityGroup = null;
     this.connectivityBall = null;
     this.connectivityCurve = null;
+    this.connectivityTube = null;
+    this.connectivityBasePoints = [];
+    this.connectivityPointLevels = [];
+    this._connExplodeKey = '';
     this.connectivity.active = false;
     this.connectivity.t = 0;
     this.connectivity.progress = 0;

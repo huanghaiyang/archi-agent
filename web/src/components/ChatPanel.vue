@@ -62,6 +62,22 @@
         </div>
         <button class="attach-x" title="移除参考图" @click="clearAttachment">×</button>
       </div>
+      <div v-if="visionProgress.active" class="vision-progress" :class="{ failed: visionProgress.failed }">
+        <div class="vp-head">
+          <span class="vp-title">
+            <i class="vp-dot"></i>
+            本地视觉模型
+          </span>
+          <b>{{ visionProgress.pct }}%</b>
+        </div>
+        <div class="vp-track" :class="{ indeterminate: visionProgress.indeterminate }">
+          <span :style="{ width: `${visionProgress.pct}%` }"></span>
+        </div>
+        <div class="vp-meta">
+          <span>{{ visionProgress.label }}</span>
+          <em v-if="visionProgress.detail">{{ visionProgress.detail }}</em>
+        </div>
+      </div>
       <div v-if="reference" class="ref-chip">
         <span class="ref-src" :class="reference.analysis?.source" :title="reference.analysis?.vision?.reason || ''">
           {{ reference.analysis?.source === 'vision' ? `视觉 · ${reference.analysis.model || '模型'}` : reference.analysis?.source === 'browser' ? '本地视觉 · SmolVLM' : (reference.analysis?.source === 'palette' ? '主色匹配' : '默认风格') }}
@@ -116,6 +132,10 @@ const attached = ref(null);
 const reference = ref(null);
 const builderOpen = ref(false);
 const localVision = ref({ enabled: false, installed: false, bytes: 0, model: null, missing: [] });
+const visionProgress = reactive({
+  active: false, failed: false, indeterminate: false, pct: 0,
+  status: '', label: '', detail: '', file: '', loaded: 0, total: 0,
+});
 let controller = null;
 let stopVisionProgress = null;
 
@@ -201,21 +221,78 @@ async function refreshLocalVision() {
   try { localVision.value = await getLocalVisionStatus(); } catch { /* server offline */ }
 }
 
+const VISION_STAGE = {
+  processor: '读取处理器与 tokenizer',
+  model: '加载 SmolVLM 权重',
+  ready: '模型已就绪，等待推理',
+  inference: '浏览器内推理中',
+  error: '加载失败',
+};
+
+function shortFile(file) {
+  const text = String(file || '');
+  if (!text) return '';
+  return text.split(/[\\/]/).pop();
+}
+
+function humanBytes(bytes) {
+  if (!bytes) return '';
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+  return `${Math.max(1, Math.round(bytes / 1048576))} MB`;
+}
+
 function onVisionTick(p) {
-  if (!busy.value) return;
+  if (!p) return;
+  visionProgress.active = true;
+  visionProgress.failed = p.status === 'error';
+  if (p.status === 'error') {
+    visionProgress.indeterminate = false;
+    visionProgress.label = p.message || '本地视觉模型加载失败';
+    visionProgress.detail = '';
+    return;
+  }
+  if (p.status === 'stage') {
+    visionProgress.indeterminate = true;
+    visionProgress.pct = 0;
+    visionProgress.status = p.status;
+    visionProgress.label = VISION_STAGE[p.file] || '准备本地视觉模型';
+    visionProgress.detail = '';
+    return;
+  }
+  if (p.status === 'ready') {
+    visionProgress.indeterminate = false;
+    visionProgress.pct = 100;
+    visionProgress.label = '模型已就绪';
+    visionProgress.detail = 'SmolVLM 500M · ONNX WASM';
+    return;
+  }
   if (p.status === 'inference') {
-    statusText.value = '本地视觉推理中（SmolVLM 500M · WASM）…';
+    visionProgress.indeterminate = false;
+    visionProgress.pct = 100;
+    visionProgress.label = VISION_STAGE.inference;
+    visionProgress.detail = '图片缩放 → 视觉编码 → 文本解码';
     return;
   }
   if (!p.total) return;
-  const pct = p.progress != null ? Math.round(p.progress) : Math.round((p.loaded / p.total) * 100);
-  const done = p.loaded ? `${(p.loaded / 1073741824).toFixed(2)} GB` : '';
-  statusText.value = `加载本地视觉模型 ${pct}%${done ? ` · ${done}` : ''}…`;
+  const ratio = p.progress != null ? p.progress : (p.loaded / p.total) * 100;
+  visionProgress.indeterminate = false;
+  visionProgress.pct = Math.max(0, Math.min(100, Math.round(ratio)));
+  visionProgress.file = shortFile(p.file);
+  visionProgress.loaded = p.loaded || 0;
+  visionProgress.total = p.total || 0;
+  visionProgress.label = VISION_STAGE[p.status] || (p.status === 'progress_total' ? '模型总进度' : '下载模型文件');
+  const size = humanBytes(visionProgress.loaded);
+  const all = humanBytes(visionProgress.total);
+  visionProgress.detail = [visionProgress.file, size && all ? `${size} / ${all}` : size].filter(Boolean).join(' · ');
 }
 
 /** Local ONNX first, then the server's provider path as a safety net. */
 async function runVisionIfAvailable(image) {
   if (!image || !localVision.value.enabled || !localVision.value.installed) return null;
+  visionProgress.active = true;
+  visionProgress.failed = false;
+  visionProgress.indeterminate = true;
+  visionProgress.pct = 0;
   statusText.value = '加载本地视觉模型…';
   try {
     const result = await analyzeImageLocally(image);
@@ -228,6 +305,9 @@ async function runVisionIfAvailable(image) {
   } catch (err) {
     statusText.value = `本地视觉不可用（${err.message}），改用服务端解析…`;
     return null;
+  } finally {
+    // keep the last progress visible for a beat, failed loads a little longer
+    setTimeout(() => { visionProgress.active = false; }, visionProgress.failed ? 3200 : 900);
   }
 }
 
@@ -329,6 +409,7 @@ function clear() {
   statusText.value = '';
   attached.value = null;
   reference.value = null;
+  visionProgress.active = false;
 }
 
 function onPromptApply(text) {
@@ -512,6 +593,43 @@ onUnmounted(() => {
   padding: 5px 8px; margin-bottom: 8px;
 }
 .ref-chip a { color: var(--accent); text-decoration: none; flex: 0 0 auto; }
+.vision-progress {
+  margin-bottom: 8px; padding: 8px 10px 7px;
+  border: 1px solid #26313e; border-radius: 9px; background: #0f151d;
+}
+.vision-progress.failed { border-color: rgba(220, 110, 110, 0.45); }
+.vp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vp-title { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: #cfdae6; }
+.vp-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #7aa8e8; flex: 0 0 auto;
+  box-shadow: 0 0 0 0 rgba(122, 168, 232, 0.55); animation: vp-pulse 1.6s infinite;
+}
+.vision-progress.failed .vp-dot { background: #d06e6e; animation: none; box-shadow: none; }
+.vp-head b { font-size: 11px; color: #a9c4f2; font-variant-numeric: tabular-nums; }
+.vision-progress.failed .vp-head b { color: #e09a9a; }
+.vp-track {
+  position: relative; height: 4px; margin-top: 7px; border-radius: 999px;
+  background: #1d2834; overflow: hidden;
+}
+.vp-track > span {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #5f88c9, #8fb6ff);
+  transition: width 0.18s ease-out;
+}
+.vision-progress.failed .vp-track > span { background: #b05b5b; }
+.vp-track.indeterminate > span {
+  width: 34% !important; animation: vp-slide 1.25s ease-in-out infinite;
+}
+.vp-meta {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin-top: 6px; font-size: 10px; color: #8fa0b1;
+}
+.vp-meta em {
+  min-width: 0; font-style: normal; color: #6f7d8b; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-align: right;
+}
+@keyframes vp-pulse { 0% { box-shadow: 0 0 0 0 rgba(122,168,232,0.55); } 70% { box-shadow: 0 0 0 6px rgba(122,168,232,0); } 100% { box-shadow: 0 0 0 0 rgba(122,168,232,0); } }
+@keyframes vp-slide { 0% { transform: translateX(-95%); } 55% { transform: translateX(120%); } 100% { transform: translateX(230%); } }
 .ref-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ref-src {
   flex: 0 0 auto; font-size: 9.5px; padding: 1px 6px; border-radius: 999px;

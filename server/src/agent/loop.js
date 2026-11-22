@@ -5,6 +5,7 @@
 import { config } from '../config.js';
 import { parseBrief } from '../design/generator.js';
 import { newDraft } from '../design/spec.js';
+import { logger } from '../logger.js';
 import { chat, probeModel, supportsVision } from './llm.js';
 import { buildSystemPrompt } from './prompt.js';
 import { createSession, digest, runTool, tools } from './tools.js';
@@ -15,6 +16,8 @@ export { createSession };
 
 /** Run one user turn; `emit` receives SSE-ready event objects. */
 export async function runAgent({ session, message, emit, mode }) {
+  const t0 = Date.now();
+  logger.info('agent', 'turn start', { requestedMode: mode || config.mode, chars: message.length, hasSpec: Boolean(session.spec?.floors?.length), vision: supportsVision() && Boolean(session.reference?.dataUrl) });
   // First substantive turn: seed the draft from the brief so that Hy4 reads a
   // real site/programme instead of an empty default.
   let seededNow = false;
@@ -25,19 +28,23 @@ export async function runAgent({ session, message, emit, mode }) {
     emitSpec(session, emit);
   }
   const useHy4 = await resolveMode(mode);
+  logger.info('agent', 'engine resolved', { mode: useHy4 ? 'hy4' : 'local', ms: Date.now() - t0 });
   if (useHy4) {
     try {
       const text = await runHy4Turn(session, message, emit);
       emit({ type: 'done', mode: 'hy4' });
+      logger.info('agent', 'turn complete', { mode: 'hy4', ms: Date.now() - t0, textChars: text.length });
       return { text, mode: 'hy4' };
     } catch (err) {
       const reason = err.message || String(err);
+      logger.error('agent', 'hy4 turn failed, falling back', { ms: Date.now() - t0, err });
       emit({ type: 'status', tone: 'warn', text: `Hy4 不可用（${reason}），已切换到本地设计引擎。` });
       // fall through to the deterministic planner
     }
   }
   const text = await runLocalTurn(session, message, emit, seededNow);
   emit({ type: 'done', mode: 'local' });
+  logger.info('agent', 'turn complete', { mode: 'local', ms: Date.now() - t0, textChars: text.length });
   return { text, mode: 'local' };
 }
 
@@ -51,14 +58,18 @@ async function resolveMode(mode) {
 
 async function callTool(session, name, args, emit) {
   const id = `t${Date.now()}${Math.random().toString(16).slice(2, 6)}`;
+  const t0 = Date.now();
   emit({ type: 'tool_start', id, name, args });
+  logger.info('agent', 'tool start', { id, name, args });
   let result;
   try {
     result = await runTool(session, name, args);
+    logger.info('agent', 'tool ok', { id, name, ms: Date.now() - t0, summary: result.summary });
     emit({ type: 'tool_end', id, name, ok: true, summary: result.summary });
     emitSpec(session, emit);
     return { ok: true, result };
   } catch (err) {
+    logger.error('agent', 'tool failed', { id, name, ms: Date.now() - t0, err });
     emit({ type: 'tool_end', id, name, ok: false, summary: err.message });
     return { ok: false, error: err.message };
   }
@@ -92,6 +103,7 @@ async function runHy4Turn(session, message, emit) {
 
   while (steps < config.maxSteps) {
     steps += 1;
+    logger.info('agent', 'hy4 step', { step: steps, messages: messages.length });
     const res = await chat({ messages, tools });
     if (res.reasoning) emit({ type: 'thinking', text: res.reasoning.slice(0, 800) });
 
@@ -103,18 +115,23 @@ async function runHy4Turn(session, message, emit) {
         try {
           args = tc.function?.arguments ? JSON.parse(tc.function.arguments) : {};
         } catch (err) {
+          logger.error('agent', 'tool args invalid json', { id: tc.id, name, err, raw: tc.function?.arguments });
           emit({ type: 'tool_end', id: tc.id, name, ok: false, summary: '参数不是合法 JSON' });
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ ok: false, error: 'arguments 必须是合法 JSON 对象' }) });
           continue;
         }
         emit({ type: 'tool_start', id: tc.id, name, args });
+        logger.info('agent', 'tool start', { id: tc.id, name, args, step: steps });
         let out;
+        const toolT0 = Date.now();
         try {
           out = await runTool(session, name, args);
+          logger.info('agent', 'tool ok', { id: tc.id, name, step: steps, ms: Date.now() - toolT0, summary: out.summary });
           emit({ type: 'tool_end', id: tc.id, name, ok: true, summary: out.summary });
           emitSpec(session, emit);
           if (name === 'submit_design') submitted = true;
         } catch (err) {
+          logger.error('agent', 'tool failed', { id: tc.id, name, step: steps, ms: Date.now() - toolT0, err });
           out = { error: err.message };
           emit({ type: 'tool_end', id: tc.id, name, ok: false, summary: err.message });
         }
