@@ -242,14 +242,27 @@ export class ArchiViewer {
     const dt = Math.min(0.05, this.clock.getDelta());
     const target = this.options.explode ? 1 : 0;
     this.explode += (target - this.explode) * Math.min(1, dt * 5);
-    const off = 1.6 * this.explode;
+    const k = this.explode;
+    // staggered exploded view: each storey slides down-screen-right as well as up,
+    // so the floor plates no longer stack on top of one another.
+    const spread = 3.8 * k;
+    const lift = 1.8 * k;
     this.floorGroups.forEach((g) => {
-      g.position.y = (g.userData.level || 0) * off;
+      const lv = g.userData.level || 0;
+      g.position.set(lv * spread * 0.72, lv * lift, -lv * spread * 0.69);
     });
-    if (this.roofGroup) this.roofGroup.position.y = (this.roofGroup.userData.level || 0) * off + 0.35 * this.explode;
+    if (this.roofGroup) {
+      const lv = this.roofGroup.userData.level || 0;
+      this.roofGroup.position.set(lv * spread * 0.72, lv * lift + 0.35 * k, -lv * spread * 0.69);
+    }
     if (this.labelsGroup) {
       this.labelsGroup.children.forEach((s) => {
-        s.position.y = (s.userData.baseY || 0) + (s.userData.level || 0) * off;
+        const lv = s.userData.level || 0;
+        s.position.set(
+          (s.userData.baseX || 0) + lv * spread * 0.72,
+          (s.userData.baseY || 0) + lv * lift,
+          (s.userData.baseZ || 0) - lv * spread * 0.69,
+        );
       });
     }
     this.selectionHelper?.update();
@@ -309,9 +322,9 @@ export class ArchiViewer {
       g.userData = { level: floor.level };
       const batch = new Batch();
 
-      // plinth / structural slab
+      // plinth / structural slab (upper floors get a stair shaft opening)
       const fp = floor.footprint;
-      batch.box('slab', fp.w + 0.24, 0.3, fp.d + 0.24, wx(fp.x + fp.w / 2), floor.elevation - 0.15, wz(fp.z + fp.d / 2));
+      this.buildFloorSlab(batch, floor, fp, wx, wz, i === 0);
       if (i === 0) {
         batch.box('plinth', fp.w + 0.9, 0.32, fp.d + 0.9, wx(fp.x + fp.w / 2), floor.elevation - 0.16, wz(fp.z + fp.d / 2));
       }
@@ -393,6 +406,57 @@ export class ArchiViewer {
     this.notify();
   }
 
+  /**
+   * Structural slab for one storey. Above ground the slab is split into four
+   * strips around the stair run so the stair can actually reach the next floor
+   * instead of ending under a solid plate.
+   */
+  buildFloorSlab(batch, floor, fp, wx, wz, ground) {
+    const th = 0.3;
+    const y = floor.elevation - 0.15;
+    const x0 = fp.x - 0.12;
+    const x1 = fp.x + fp.w + 0.12;
+    const z0 = fp.z - 0.12;
+    const z1 = fp.z + fp.d + 0.12;
+    const emit = (xa, xb, za, zb) => {
+      const w = xb - xa;
+      const d = zb - za;
+      if (w <= 0.05 || d <= 0.05) return;
+      batch.box('slab', w, th, d, wx((xa + xb) / 2), y, wz((za + zb) / 2));
+    };
+
+    const core = floor.core;
+    if (ground || !core) {
+      emit(x0, x1, z0, z1);
+      return;
+    }
+
+    // same stair geometry as interior.js: 14 risers, run clamped to 0.3 m
+    const steps = 14;
+    const run = Math.min(0.3, (core.d * 0.62) / steps);
+    const stairW = Math.min(1.5, core.w * 0.48);
+    let hx0 = Math.max(x0, core.x + 0.2 - 0.12);
+    let hx1 = Math.min(x1, core.x + 0.2 + stairW + 0.12);
+    let hz0 = Math.max(z0, core.z + 0.2 - 0.12);
+    let hz1 = Math.min(z1, core.z + 0.2 + steps * run + 0.28);
+
+    if (hx1 - hx0 < 0.5 || hz1 - hz0 < 0.6) {
+      emit(x0, x1, z0, z1);
+      return;
+    }
+
+    emit(x0, hx0, z0, z1);
+    emit(hx1, x1, z0, z1);
+    emit(hx0, hx1, z0, hz0);
+    emit(hx0, hx1, hz1, z1);
+
+    // thin edge trim around the shaft so the cut reads as a deliberate opening
+    batch.box('frame', hx1 - hx0 + 0.08, 0.05, 0.06, wx((hx0 + hx1) / 2), y + 0.16, wz(hz0));
+    batch.box('frame', hx1 - hx0 + 0.08, 0.05, 0.06, wx((hx0 + hx1) / 2), y + 0.16, wz(hz1));
+    batch.box('frame', 0.06, 0.05, hz1 - hz0, wx(hx0), y + 0.16, wz((hz0 + hz1) / 2));
+    batch.box('frame', 0.06, 0.05, hz1 - hz0, wx(hx1), y + 0.16, wz((hz0 + hz1) / 2));
+  }
+
   registerNode(parent, object, label, meta = {}) {
     const id = meta.id || `n${(this.nodeSeq += 1)}`;
     const node = {
@@ -434,7 +498,7 @@ export class ArchiViewer {
         const label = makeLabel(room.name);
         const y = floor.elevation + Math.min(room.height, floor.height) + 0.55;
         label.position.set(wx(room.x + room.w / 2), y, wz(room.z + room.d / 2));
-        label.userData = { level: floor.level, name: room.name, baseY: y };
+        label.userData = { level: floor.level, name: room.name, baseX: wx(room.x + room.w / 2), baseY: y, baseZ: wz(room.z + room.d / 2) };
         group.add(label);
       }
     }

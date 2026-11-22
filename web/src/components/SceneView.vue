@@ -47,7 +47,7 @@
             <span class="glabel">图层</span>
             <button class="toggle" :class="{ on: opts.roof }" @click="toggle('roof')">屋顶</button>
             <button class="toggle" :class="{ on: opts.labels }" @click="toggle('labels')">房间名</button>
-            <button class="toggle" :class="{ on: opts.explode }" @click="toggle('explode')">爆炸</button>
+            <button class="toggle" :class="{ on: opts.explode }" @click="toggle('explode')" title="错层展示：逐层水平与竖向错开">错层</button>
             <button class="toggle" :class="{ on: opts.context }" @click="toggle('context')">周边</button>
             <button class="toggle wire" :class="{ on: opts.wireframe }" @click="toggle('wireframe')">线框</button>
             <button class="toggle" :class="{ on: opts.section }" @click="toggleSection">剖切</button>

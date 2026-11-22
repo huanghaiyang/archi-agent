@@ -22,7 +22,7 @@ export const tools = [
     type: 'function',
     function: {
       name: 'design_scheme',
-      description: '根据任务书生成（或重生成）总体方案：功能类型、层数、场地尺寸、体量、房间排布。会覆盖现有草稿。',
+      description: '根据任务书生成（或重生成）总体方案：功能类型、层数、场地尺寸、体量、房间排布。会覆盖现有草稿。核心筒必须各层对位，楼梯上方须留梯井洞口，保证楼层可达。',
       parameters: {
         type: 'object',
         properties: {
